@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "author": "Smart Pill Box",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-s2-devkitm-1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": -100, "left": 250, "attrs": { "color": "green", "label": "Slot 1" } },
+    { "type": "wokwi-pushbutton", "id": "btn2", "top": -35, "left": 250, "attrs": { "color": "yellow", "label": "Slot 2" } },
+    { "type": "wokwi-pushbutton", "id": "btn3", "top": 30, "left": 250, "attrs": { "color": "blue", "label": "Slot 3" } },
+    { "type": "wokwi-led", "id": "led1", "top": 115, "left": 245, "attrs": { "color": "green", "label": "Slot 1" } },
+    { "type": "wokwi-led", "id": "led2", "top": 165, "left": 245, "attrs": { "color": "yellow", "label": "Slot 2" } },
+    { "type": "wokwi-led", "id": "led3", "top": 215, "left": 245, "attrs": { "color": "blue", "label": "Slot 3" } },
+    { "type": "wokwi-buzzer", "id": "buzz", "top": 270, "left": 240, "attrs": { "volume": "0.1" } },
+    { "type": "wokwi-dht22", "id": "dht", "top": 215, "left": -170, "attrs": { "temperature": "31.5", "humidity": "72" } },
+    { "type": "wokwi-ds1307", "id": "rtc", "top": -115, "left": -180, "attrs": { "initTime": "2026-09-15T07:59:50" } }
+  ],
+  "connections": [
+    [ "btn1:1.l", "esp:5", "green", [] ], [ "btn1:2.l", "esp:GND.1", "black", [] ],
+    [ "btn2:1.l", "esp:6", "yellow", [] ], [ "btn2:2.l", "esp:GND.1", "black", [] ],
+    [ "btn3:1.l", "esp:7", "blue", [] ], [ "btn3:2.l", "esp:GND.1", "black", [] ],
+    [ "led1:A", "esp:8", "green", [] ], [ "led1:C", "esp:GND.1", "black", [] ],
+    [ "led2:A", "esp:9", "yellow", [] ], [ "led2:C", "esp:GND.1", "black", [] ],
+    [ "led3:A", "esp:10", "blue", [] ], [ "led3:C", "esp:GND.1", "black", [] ],
+    [ "buzz:1", "esp:11", "purple", [] ], [ "buzz:2", "esp:GND.1", "black", [] ],
+    [ "dht:SDA", "esp:12", "green", [] ], [ "dht:VCC", "esp:3V3", "red", [] ], [ "dht:GND", "esp:GND.1", "black", [] ],
+    [ "rtc:SDA", "esp:3", "green", [] ], [ "rtc:SCL", "esp:4", "blue", [] ], [ "rtc:5V", "esp:5V", "red", [] ], [ "rtc:GND", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}
