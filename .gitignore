@@ -3,3 +3,9 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+src/config/Secrets.h
+include/config/Secrets.h
+gateway/.env
+gateway/data/*.db
+__pycache__/
+*.pyc
