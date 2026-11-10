@@ -1,281 +1,655 @@
 # Hộp đựng thuốc thông minh — Smart Pill Box
 
-Giao diện hiện dùng ảnh chụp lưu tại `gateway/static/images`, chữ đen, nút blue và menu cố định. Các danh sách lịch sử/kết quả/nạp thuốc/lệnh hỗ trợ `?page=1&page_size=8`; gọi API không có tham số vẫn trả mảng để giữ tương thích.
+Smart Pill Box là hệ thống IoT dùng ESP32-S2 để nhắc lịch lấy thuốc, ghi nhận thao tác mở ngăn và theo dõi nhiệt độ/độ ẩm. Dữ liệu được gửi qua MQTT đến Gateway Python, lưu bằng SQLite và hiển thị trên Dashboard tiếng Việt. Người chăm sóc có thể xem trạng thái hộp, lịch sử và xác minh mã thuốc trước khi nạp.
 
-Dữ liệu khởi tạo dùng hồ sơ ẩn danh và danh mục Vitamin C, Vitamin D3, Canxi, Vitamin B12. Đây là dữ liệu cấu hình tham khảo, không phải hồ sơ người bệnh hay đơn thuốc thật. Lịch sử và số đo chỉ được ghi khi có thao tác/bản tin thiết bị.
+Hệ thống có ba ngăn, hỗ trợ nhiều lịch cho một ngăn và tiếp tục nhắc cục bộ khi mất mạng. Đây là đồ án học tập: mở ngăn không chứng minh thuốc đã được uống; tên thuốc và lịch khởi tạo là cấu hình tham khảo, không phải đơn thuốc.
 
-Muốn tạo lại dữ liệu, dừng Gateway rồi chạy `python -m gateway.reset_data --db gateway/data/pillbox.db`. Lệnh sao lưu đầy đủ vào `gateway/data/backups/<thời điểm>/` trước khi xóa. Có thể khôi phục bằng file `.db` đã sao lưu khi Gateway đã dừng. Không đưa backup vào Git.
+## 1. Chọn cách chạy
 
-Kiểm thử phân trang/reset/phân quyền: `python -m unittest discover -s gateway/tests -t .` (33 test). Kiểm tra giao diện: `node test/ui_dashboard.mjs` khi Edge/Chromium có CDP port 9334 và profile riêng; các POST refill và GET phân trang thử được chặn riêng trong trang kiểm thử, không ghi dữ liệu giả vào DB chạy thật.
+| Cách chạy | Cần có | Kết quả |
+|---|---|---|
+| Chỉ Gateway/Dashboard | Git, Python, trình duyệt | Xem web và cấu hình; chưa có số đo nếu không kết nối thiết bị |
+| Đầy đủ bằng Wokwi | Các công cụ trên + VS Code, PlatformIO, Wokwi license cá nhân | Mô phỏng thiết bị và kết nối Dashboard |
+| Board thật | Các công cụ trên + Feather ESP32-S2 và linh kiện | Chạy firmware trên phần cứng với cùng Gateway |
 
-Đồ án IoT sử dụng ESP32-S2, RTC, ba nút/công tắc ngăn, LED/buzzer và DHT22 để nhắc lịch, ghi nhận thao tác lấy thuốc, theo dõi môi trường và gửi dữ liệu qua MQTT tới Flask Gateway → SQLite → Dashboard tiếng Việt.
+Nếu chưa có board, thực hiện **bước 2 → 7** để chạy Wokwi. Nếu chỉ cần xem web, làm đến **bước 5**.
 
-Đây là prototype học tập. Mở ngăn/xác nhận lấy không chứng minh thuốc đã được uống. Hệ thống không kê đơn, chỉnh liều, hướng dẫn uống bù hoặc tự thay lịch sau một lần lấy trễ. Dữ liệu PB01/PB02, P001/P002 và MED001–MED004 đều là mã giả.
+Luồng dữ liệu: **ESP32-S2 → Wi-Fi/MQTT → Gateway Flask → SQLite → Dashboard**.
 
-## Những gì đã triển khai
+Luồng điều khiển: **Dashboard/API → Gateway → MQTT → ESP32-S2 → phản hồi trạng thái**.
 
-- Ba ngăn vật lý; bốn lịch trên PB01, gồm hai lịch cho cùng MED001/ngăn1.
-- Occurrence riêng cho từng lịch/ngày; quá hạn vẫn tiếp tục theo dõi lấy trễ.
-- 08:00 nhắc S1 → 08:15 MISSED → 10:00 xác nhận lấy muộn 120 phút; 14:00 S2 giữ nguyên.
-- Mở sai ngăn không hoàn tất lịch; overlap cùng ngăn tạo AMBIGUOUS_OPEN.
-- Ledger và cấu hình lịch có version trong NVS, hạn chế completion trùng sau reboot.
-- MQTT worker riêng để reconnect/socket không chạy trên task scheduler; FIFO RAM 16 sự kiện chờ, thêm một bản đang gửi. Tràn bỏ oldest queued, có bộ đếm.
-- Payload v2 có event_id, boot_id, occurrence_id và thời điểm phát sinh; Gateway chống trùng, vẫn nhận payload v1.
-- Refill Verify → Confirm với token 5 phút dùng một lần; kiểm tra patient/box/slot/medication, actor, expiry và assignment version; ghi audit.
-- DHT: lỗi sensor/NaN, 3 mẫu xác nhận vượt ngưỡng hoặc hồi phục, hysteresis 2 đơn vị.
-- Dashboard theo hộp, ba ngăn, lịch, kết quả occurrence, sự kiện, môi trường và refill.
-- Xác thực bearer tùy chọn với family/nurse/admin và phạm vi hộp, enforce phía API.
+## 2. Cài công cụ trên máy mới
 
-Build, unit/native/host và synthetic MQTT đã chạy được. Wokwi runtime và board thật chưa có bằng chứng; kết luận hiện tại: **NOT READY FOR DEMO**. Xem [báo cáo](docs/QUALITY_REPORT.md) và [ma trận kiểm thử](docs/TEST_MATRIX.md).
+| Công cụ | Mục đích | Bắt buộc? |
+|---|---|---|
+| Git | Clone/cập nhật source | Có |
+| Python 3.11–3.13 | Chạy Gateway; máy phát triển đã kiểm tra với Python 3.13 | Có |
+| Trình duyệt | Xem Dashboard | Có |
+| VS Code | Mở project và chạy extension | Khi dùng Wokwi |
+| Extension PlatformIO IDE | Build/upload firmware | Khi chạy firmware |
+| Extension Wokwi Simulator | Mô phỏng trong VS Code | Khi dùng Wokwi |
+| Node.js 22+ và Edge/Chromium | Kiểm thử giao diện tự động | Tùy chọn |
+| MSYS2 UCRT64/compiler C++ | Kiểm thử native/host trên Windows | Tùy chọn |
 
-## Cấu trúc chính
+Kiểm tra trong terminal:
 
-| Thư mục/file | Nội dung |
-|---|---|
-| platformio.ini | Production Feather ESP32-S2; simulation riêng; native tests |
-| src/app, include/app | AppController, Scheduler |
-| include/domain | Model sự kiện, FIFO, logic cảnh báo môi trường |
-| src/drivers, include/drivers | RTC, nút, LED, buzzer, DHT; interface HX711 chưa triển khai |
-| src/communication | Wi-Fi, MQTT worker, command |
-| src/storage | Preferences/NVS |
-| gateway | Flask API, MQTT receiver, SQLite migration/seed, Dashboard |
-| test, gateway/tests | Native/host và Gateway/broker tests |
-| diagram.json, wokwi.toml | Mạch và đường dẫn artifact Wokwi |
-| docs | Kiến trúc, phần cứng, luật xử lý, bảo mật, demo, bằng chứng |
+~~~text
+git --version
+python --version
+~~~
 
-## Chuẩn bị sau khi clone/pull
+Nếu Windows không nhận python, thử **py -3 --version** và dùng **py -3** thay python khi tạo môi trường ảo. Linux/macOS thường dùng **python3**.
 
-Cài Python 3, PlatformIO IDE/Core và VS Code. Muốn chạy simulation thì cài Wokwi Simulator extension và tự kích hoạt license. Mỗi người tự điền key/cấu hình cá nhân sau khi pull; repository không chứa license, token hoặc mật khẩu dùng chung.
+Không cần SQLite server; Python sử dụng SQLite qua thư viện chuẩn. Không cần Node.js để chạy web thông thường.
 
-Từ thư mục gốc repository:
+Các khối **PowerShell**, **Git Bash Windows** và **Linux/macOS** là các lựa chọn thay thế nhau. Không trộn cú pháp hoặc gõ thêm ký hiệu dấu nhắc terminal.
 
-```bash
-python -m pip install -r gateway/requirements.txt
-```
+## 3. Clone đúng nhánh và mở project
 
-Secrets của board thật: sao chép include/config/Secrets.example.h thành include/config/Secrets.h rồi tự điền Wi-Fi/MQTT. Secrets.h đã được ignore; không dùng git add -f để đưa vào Git. Simulation dùng Wokwi-GUEST và test.mosquitto.org:1883 với credential trống, không cần Secrets.h.
+Chạy tại thư mục muốn lưu source:
 
-Wokwi VS Code license khác WOKWI_CLI_TOKEN:
+~~~bash
+git clone --branch feat/iot-pillbox-care-workflows --single-branch https://github.com/Mei-iwi/Pill_Box.git
+cd Pill_Box
+git branch --show-current
+code .
+~~~
 
-1. Cài extension Wokwi Simulator và kích hoạt personal license.
-2. Nếu chưa được nhận tự động: F1 → Wokwi: Manually Enter License Key → tự dán key.
-3. Không dán license vào README, source, diagram.json hoặc wokwi.toml.
-4. CLI token chỉ cần khi dùng CLI; tự tạo và đặt trong biến môi trường. Extension không yêu cầu CLI token.
+Nhánh phải là **feat/iot-pillbox-care-workflows**. Nếu máy chưa nhận lệnh code, mở VS Code → **File → Open Folder** → chọn thư mục Pill_Box vừa clone.
 
-Sau pull/clean, build lại firmware nếu .pio/build chưa có. .env chỉ là file mẫu; chương trình không tự load .env.
+Nếu đã clone từ trước:
 
-## Chạy Gateway và xem kết quả
+~~~bash
+cd Pill_Box
+git fetch origin
+git switch feat/iot-pillbox-care-workflows
+git pull --ff-only
+~~~
 
-Mở terminal tại thư mục gốc. Chọn đúng cú pháp của shell, không gõ ký hiệu dấu nhắc $ vào lệnh.
+Lưu/commit thay đổi cá nhân trước khi chuyển nhánh hoặc pull. Không clone thêm một Pill_Box bên trong thư mục project đang có.
 
-Git Bash:
+Mở terminal trong VS Code. Thư mục gốc phải chứa:
 
-```bash
-export PILLBOX_DB="gateway/data/care_demo.db"
-export MQTT_HOST="test.mosquitto.org"
-export MQTT_PORT="1883"
-export PILLBOX_MQTT_AUTOSTART="1"
-python -m gateway.app
-```
+~~~text
+platformio.ini
+wokwi.toml
+diagram.json
+gateway/
+src/
+include/
+~~~
 
-PowerShell:
+**Tất cả lệnh bên dưới chạy tại thư mục gốc này**, không chạy từ bên trong gateway/.
 
-```powershell
-$env:PILLBOX_DB="gateway/data/care_demo.db"
+## 4. Tạo môi trường Python và cài dependencies
+
+### Windows — PowerShell
+
+~~~powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r gateway/requirements.txt
+~~~
+
+Không cần kích hoạt .venv. Gọi trực tiếp executable như trên tránh lỗi ExecutionPolicy khi chạy Activate.ps1.
+
+### Windows — Git Bash
+
+~~~bash
+python -m venv .venv
+./.venv/Scripts/python.exe -m pip install -r gateway/requirements.txt
+~~~
+
+### Linux/macOS
+
+~~~bash
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r gateway/requirements.txt
+~~~
+
+Nếu Linux báo thiếu venv, cài gói hỗ trợ venv của bản phân phối rồi chạy lại.
+
+Gateway dùng Flask và paho-mqtt trong [requirements.txt](gateway/requirements.txt). Thư viện firmware do PlatformIO tải riêng khi build.
+
+## 5. Chạy Gateway và mở Dashboard
+
+Mở **terminal 1** tại thư mục gốc, dùng một trong các khối sau.
+
+### Windows — PowerShell
+
+~~~powershell
+$env:PILLBOX_DB="gateway/data/pillbox.db"
 $env:MQTT_HOST="test.mosquitto.org"
 $env:MQTT_PORT="1883"
 $env:PILLBOX_MQTT_AUTOSTART="1"
-python -m gateway.app
-```
+$env:PILLBOX_BIND="127.0.0.1"
+$env:PORT="5000"
 
-Giữ terminal này đang chạy. Mở **http://127.0.0.1:5000** trong trình duyệt. Gateway mặc định chỉ lắng nghe localhost; chưa có firmware kết nối thì hiện offline/chưa có mẫu cảm biến.
+.\.venv\Scripts\python.exe -m gateway.app
+~~~
 
-Dùng care_demo.db để nhận seed mới; database cũ vẫn giữ lịch/cấu hình của người dùng. Nếu bỏ PILLBOX_DB, mặc định là gateway/data/pillbox.db. Migration giữ dữ liệu cũ, không tự sửa lịch đã có sang mẫu mới.
+### Windows — Git Bash
 
-| Hộp / người dùng | Ngăn | Mã demo | Lịch |
-|---|---:|---|---|
-| PB01 / P001 | 1 | MED001 | S1 08:00, S2 14:00 |
-| PB01 / P001 | 2 | MED002 | S3 09:00 |
-| PB01 / P001 | 3 | MED003 | S4 20:00 |
-| PB02 / P002 | 1 | MED004 | S5 07:30 |
+~~~bash
+export PILLBOX_DB="gateway/data/pillbox.db"
+export MQTT_HOST="test.mosquitto.org"
+export MQTT_PORT="1883"
+export PILLBOX_MQTT_AUTOSTART="1"
+export PILLBOX_BIND="127.0.0.1"
+export PORT="5000"
 
-PB02 là seed phía Gateway; firmware/mạch hiện tại chỉ đại diện PB01.
+./.venv/Scripts/python.exe -m gateway.app
+~~~
 
-API xem dữ liệu:
+### Linux/macOS
 
-```bash
+~~~bash
+export PILLBOX_DB="gateway/data/pillbox.db"
+export MQTT_HOST="test.mosquitto.org"
+export MQTT_PORT="1883"
+export PILLBOX_MQTT_AUTOSTART="1"
+export PILLBOX_BIND="127.0.0.1"
+export PORT="5000"
+
+./.venv/bin/python -m gateway.app
+~~~
+
+Khi thấy **Running on http://127.0.0.1:5000**, mở:
+
+**http://127.0.0.1:5000**
+
+Giữ terminal 1 đang chạy. Nhấn **Ctrl+C** để dừng Gateway.
+
+Lần đầu, Gateway tự tạo thư mục dữ liệu, database, migration và cấu hình hộp/lịch. Nếu chưa chạy Wokwi/board, thiết bị có thể hiện ngoại tuyến; lịch sử hoặc số đo trống là bình thường.
+
+**Chương trình không tự đọc .env.** [gateway/.env.example](gateway/.env.example) chỉ là mẫu tham khảo; đặt biến trong terminal như trên mới có hiệu lực. Hướng dẫn này dùng database pillbox.db. Mỗi terminal mới cần đặt lại biến môi trường.
+
+Nếu bỏ PILLBOX_MQTT_AUTOSTART=1, web vẫn mở nhưng MQTT listener không chạy. Gateway và firmware phải sử dụng cùng broker.
+
+Broker test.mosquitto.org:1883 công khai, không mã hóa. Chỉ dùng mã hồ sơ ẩn danh/dữ liệu thử nghiệm, không gửi thông tin người bệnh thật lên broker.
+
+### Kiểm tra API ở terminal 2
+
+Giữ terminal 1 chạy, mở **terminal 2**.
+
+PowerShell:
+
+~~~powershell
+curl.exe http://127.0.0.1:5000/api/devices
+curl.exe "http://127.0.0.1:5000/api/devices/PB01/events?page=1&page_size=8"
+~~~
+
+Git Bash/Linux/macOS:
+
+~~~bash
 curl http://127.0.0.1:5000/api/devices
-curl http://127.0.0.1:5000/api/devices/PB01/events
-curl http://127.0.0.1:5000/api/devices/PB01/occurrences
-curl http://127.0.0.1:5000/api/devices/PB01/environment
-curl http://127.0.0.1:5000/api/devices/PB01/commands
-```
+curl "http://127.0.0.1:5000/api/devices/PB01/events?page=1&page_size=8"
+~~~
 
-Trong PowerShell dùng curl.exe thay curl nếu curl là alias.
+API đầu trả danh sách hộp. API thứ hai trả items, total, page, page_size và pages. items trống khi chưa có thao tác. API danh sách không có tham số phân trang vẫn trả mảng để giữ tương thích.
 
-## Build firmware và chạy Wokwi
+## 6. Build firmware cho Wokwi
 
-Nếu PlatformIO có trong PATH:
+Cài **PlatformIO IDE** trong VS Code, chờ hoàn tất thiết lập rồi mở lại cửa sổ nếu được yêu cầu. Mở đúng thư mục có [platformio.ini](platformio.ini).
 
-```bash
-pio run -e adafruit_feather_esp32s2
+Build trong **terminal 2**, để Gateway ở terminal 1 tiếp tục chạy.
+
+Trong **PlatformIO Core CLI terminal**, hoặc khi pio đã có trong PATH:
+
+~~~bash
 pio run -e esp32s2_wokwi
-```
+~~~
 
-Nếu chưa có trong PATH, Git Bash dùng:
+Nếu terminal không nhận pio, dùng executable do PlatformIO IDE cài:
 
-```bash
-"$HOME/.platformio/penv/Scripts/platformio.exe" run -e esp32s2_wokwi
-```
+PowerShell Windows:
 
-PowerShell dùng:
-
-```powershell
+~~~powershell
 & "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e esp32s2_wokwi
-```
+~~~
 
-Cú pháp & "$env:..." thuộc PowerShell, dùng trong Git Bash sẽ gây lỗi syntax near '&'.
+Git Bash Windows:
 
-Build kết thúc SUCCESS sẽ tạo:
+~~~bash
+"$HOME/.platformio/penv/Scripts/platformio.exe" run -e esp32s2_wokwi
+~~~
 
-```text
+Linux/macOS, nếu extension dùng vị trí mặc định:
+
+~~~bash
+"$HOME/.platformio/penv/bin/platformio" run -e esp32s2_wokwi
+~~~
+
+Lần đầu cần Internet để tải platform, toolchain và thư viện. Build thành công kết thúc bằng **SUCCESS** và tạo:
+
+~~~text
 .pio/build/esp32s2_wokwi/firmware.bin
 .pio/build/esp32s2_wokwi/firmware.elf
-```
+~~~
 
-wokwi.toml đã trỏ đúng hai file trên. Nếu gặp “firmware binary not found”, mở đúng workspace gốc chứa platformio.ini và chạy build env esp32s2_wokwi trước khi Start Simulator; không trỏ tới file firmware chưa được tạo.
+[wokwi.toml](wokwi.toml) đã trỏ đúng hai file này. .pio không được commit, nên người clone mới phải tự build.
 
-Trong VS Code: F1 → Wokwi: Start Simulator. [Tài liệu Wokwi](https://docs.wokwi.com/vscode/platformio) liệt kê esp32-s2-saola-1 tương ứng board-esp32-s2-devkitm-1; production vẫn giữ board Feather.
+| Environment | Board | Mục đích |
+|---|---|---|
+| esp32s2_wokwi | ESP32-S2 Saola | Mô phỏng Wokwi |
+| adafruit_feather_esp32s2 | Adafruit Feather ESP32-S2 | Board thật |
+| native | Máy tính | Kiểm thử Scheduler |
 
-RTC simulation bắt đầu 07:59:50 ngày 10/11/2026. Cửa sổ và lịch giống production; không rút ngắn âm thầm. Chờ tới 08:00 sẽ nhắc ngăn1. Dùng Serial Monitor gửi từng dòng có newline để nhảy giờ:
+Không thay board production để xử lý lỗi của environment mô phỏng.
 
-```text
+## 7. Kích hoạt Wokwi và chạy toàn hệ thống
+
+### 7.1. Tự nhập license sau khi clone
+
+1. Cài extension **Wokwi Simulator**.
+2. **F1 → Wokwi: Request a New License**.
+3. Đăng nhập/kích hoạt trên trang Wokwi; đồng ý mở lại VS Code khi được hỏi.
+4. Nếu extension chưa nhận key: **F1 → Wokwi: Manually Enter License Key**, tự dán key được cấp.
+5. Nếu báo hết hạn, yêu cầu license mới, nhập lại rồi dùng **Developer: Reload Window** nếu cần.
+
+License là cấu hình cá nhân, không nằm trong source. Không dán key vào README, diagram.json hoặc wokwi.toml.
+
+**Wokwi VS Code license khác WOKWI_CLI_TOKEN.** Chạy bằng extension như dưới đây không yêu cầu cài CLI hoặc đặt CLI token.
+
+### 7.2. Start Simulator
+
+1. Kiểm tra Gateway ở terminal 1 vẫn chạy.
+2. Kiểm tra build esp32s2_wokwi đã SUCCESS.
+3. **F1 → Wokwi: Start Simulator**.
+4. Chờ thiết bị kết nối Wi-Fi/MQTT và gửi heartbeat.
+5. Trên Dashboard chọn **PB01**; trạng thái cập nhật khi Gateway nhận bản tin.
+
+Simulation dùng **Wokwi-GUEST**, mật khẩu trống và broker **test.mosquitto.org:1883**. Không cần Secrets.h để chạy cấu hình Wokwi mặc định.
+
+Heartbeat khoảng 20 giây/lần, môi trường khoảng 60 giây/lần, Dashboard tải lại dữ liệu mỗi 4 giây. Web mở được chưa có nghĩa thiết bị đã kết nối.
+
+### 7.3. Kiểm tra các chức năng
+
+RTC trong [diagram.json](diagram.json) bắt đầu **07:59:50 ngày 10/11/2026**, theo giờ mô phỏng.
+
+| Thao tác | Kết quả cần quan sát |
+|---|---|
+| Chờ tới 08:00 | LED1/buzzer nhắc, có sự kiện bắt đầu nhắc |
+| Bấm ngăn 2 khi đang nhắc ngăn 1 | Mở sai ngăn; ngăn 1 vẫn nhắc |
+| Bấm đúng ngăn 1 trong cửa sổ đúng giờ | Xác nhận lấy đúng giờ |
+| Thay giá trị DHT22 | Số đo lên Dashboard sau chu kỳ publish tiếp theo |
+| Thiết bị → Cập nhật trạng thái | Chờ phản hồi rồi đã áp dụng khi nhận ACK |
+| Thiết bị → Tắt âm & đèn nhắc | Tắt cảnh báo hiện tại; không hoàn tất lịch |
+
+Để thử lấy muộn, bắt đầu phiên chưa hoàn tất S1 và không bấm ngăn 1 đúng giờ. Gửi **từng dòng có Enter/newline** trong Serial Monitor:
+
+~~~text
 TIME 08:15
 TIME 10:00
-TIME 14:00
-```
+~~~
 
-Kịch bản lấy muộn:
+- 08:15: S1 có cảnh báo MISSED.
+- Sau TIME 10:00, bấm ngăn 1: xác nhận lấy trễ 120 phút.
+- Gửi tiếp **TIME 14:00**: S2 vẫn đến lịch đã cài.
+- Lịch sử giữ MISSED, nhưng kết quả tổng kết S1 là lấy trễ.
+- S3 có lịch 09:00; khi nhảy tới 10:00, ngăn 2 có thể quá hạn độc lập, cần xử lý riêng.
 
-1. 08:00: nhấn ngăn2 để thử WRONG_SLOT; ngăn1 vẫn nhắc.
-2. TIME 08:15: S1 có MISSED, occurrence vẫn theo dõi.
-3. TIME 10:00 rồi nhấn ngăn1: S1 thành LATE, trễ120 phút. Do S3 có lịch09:00, khi nhảy tới10:00 có thể có LED2/overdue S3 độc lập; xử lý ngăn2 riêng.
-4. TIME 14:00: S2 vẫn nhắc ngăn1; nhấn đúng để có ON_TIME.
-5. Dashboard: xem occurrence S1=LATE; lịch sử vẫn giữ MISSED. Polling mỗi4 giây.
+TIME chỉ có trong simulation. Nếu thử lại occurrence đã hoàn tất cùng ngày, dùng phiên mô phỏng sạch hoặc đổi ngày initTime trong diagram.json sang ngày mới. Ledger ngăn ghi nhận lặp; không xóa DB/NVS tùy tiện.
 
-TIME chỉ hoạt động trong simulation, không chỉnh RTC board thật. Để thử lại một occurrence đã hoàn tất cùng ngày, dùng phiên simulation sạch hoặc ngày RTC mới; không xóa NVS/database người dùng.
+DHT mặc định trong sơ đồ 31,5 °C / 72% RH. Ngưỡng phần mềm 30 °C / 70% cần 3 mẫu gửi liên tiếp; hồi phục cần cả hai dưới 28 °C / 68% đủ3 mẫu. Đây là ngưỡng minh họa, không phải tiêu chuẩn bảo quản chung.
 
-DHT mặc định31.5°C/72%. Ngưỡng demo30°C/70%, publish mỗi60 giây, cần3 mẫu liên tiếp để cảnh báo. Đưa xuống <28°C và <68% đủ3 mẫu để kết thúc cảnh báo. Nhãn/bao bì và hướng dẫn dược sĩ mới là cơ sở bảo quản; không suy ra chất lượng thuốc từ DHT.
+## 8. Sử dụng Dashboard và dữ liệu khởi tạo
 
-Agent chưa điều khiển GUI Wokwi hoặc quan sát GPIO. Các bước trên là checklist cần thực thi; [demo script](docs/DEMO_SCRIPT.md) ghi rõ cách thu bằng chứng.
+- **Tổng quan:** hộp đang chọn, lần nhắc tiếp theo, ba ngăn và môi trường.
+- **Lịch nhắc:** lịch đã cấu hình và kết quả từng lần nhắc.
+- **Lịch sử:** mở ngăn, cảnh báo và số đo gần đây.
+- **Nạp thuốc:** xác minh mã, xác nhận và xem lịch sử nạp.
+- **Thiết bị:** trạng thái, hàng đợi và các nút điều khiển.
+- **Tài khoản:** nhập khóa truy cập khi máy chủ bật xác thực.
 
-## Xác minh nạp thuốc hai bước
+Chọn hộp tại submenu. Các danh sách dài có phân trang; header/submenu cố định khi cuộn.
 
-Chọn hộp, nhập patient_id, ngăn và mã trên bao bì ở Dashboard:
+| Hộp | Hồ sơ | Ngăn | Mã | Tên hiển thị | Lịch |
+|---|---|---:|---|---|---|
+| PB01 | P001 — Hồ sơ 01 | 1 | MED001 | Vitamin C | S1 08:00, S2 14:00 |
+| PB01 | P001 — Hồ sơ 01 | 2 | MED002 | Vitamin D3 | S3 09:00 |
+| PB01 | P001 — Hồ sơ 01 | 3 | MED003 | Canxi | S4 20:00 |
+| PB02 | P002 — Hồ sơ 02 | 1 | MED004 | Vitamin B12 | S5 07:30 |
 
-- PB01/P001/ngăn1/MED001 → VERIFIED; sau đó nhấn Xác nhận nạp.
-- MED002 ở ngăn1 PB01 → MEDICATION_MISMATCH.
-- PB02 nhưng patient P001 → PATIENT_BOX_MISMATCH.
-- Token hết hạn5 phút, dùng lại, đổi actor hoặc đổi assignment → bị chặn.
-- Đổi form/hộp sau Verify sẽ khóa Confirm; xác minh lại trước khi nạp.
+Đây là cấu hình khởi tạo, không phải hồ sơ người bệnh/chỉ định dùng thuốc. Không tạo sẵn lịch sử lấy hoặc số đo giả. **Firmware/mạch hiện tại là PB01; PB02 chỉ có cấu hình phía Gateway**, không tự phát bản tin.
 
-API Verify nhận box_id, patient_id, slot_id, medication_code và actor_id trong demo chưa auth. Trả verification_id/expires_at. Confirm nhận verification_id và actor_id khi chưa auth; actor được máy chủ quyết định nếu bật auth. Audit ghi cả thành công và sai lệch.
+Lịch tiếp theo trên web tính theo thời gian hiện tại tại Việt Nam; khi dùng TIME để nhảy giờ mô phỏng, đối chiếu event/occurrence của thiết bị để kiểm thử.
 
-Quy trình xác minh mã bao bì không chứng minh viên thực tế trong ngăn là đúng.
+### Nạp thuốc hai bước
 
-## Bật xác thực API và phân quyền
+1. Chọn **PB01**, vào **Nạp thuốc**.
+2. Nhập mã người chăm sóc, hồ sơ **P001**, ngăn **1**.
+3. Nhập/quét **MED001** ở ô mã trên bao bì.
+4. **Xác minh mã**; khi phù hợp, nút Xác nhận nạp được mở.
+5. **Xác nhận nạp** để hoàn tất và ghi lịch sử.
 
-Mặc định là demo cục bộ chưa auth. Muốn dùng quyền family/nurse/admin:
+MED002 ở ngăn 1 PB01 bị từ chối vì sai mã. PB02 nhưng dùng P001 bị từ chối vì sai hồ sơ/hộp. Token có hạn 5 phút, dùng một lần; đổi form, hết hạn hoặc thay assignment thì phải xác minh lại.
 
-```powershell
-Copy-Item gateway/auth.example.json gateway/auth.local.json
-python -c "import secrets; print(secrets.token_urlsafe(32))"
-```
+Khi bật auth, mã người chăm sóc lấy từ tài khoản phía máy chủ. Xác minh mã bao bì không nhận diện từng viên thuốc trong ngăn.
 
-Tự tạo một token khác nhau cho từng tài khoản và thay TOÀN BỘ tên key REPLACE_WITH... trong auth.local.json. Máy chủ từ chối mẫu placeholder. Chỉnh devices theo phạm vi phân công; không commit file này.
+## 9. Chạy trên Adafruit Feather ESP32-S2 thật
+
+Bỏ qua mục này nếu dùng Wokwi.
+
+### 9.1. Tạo cấu hình cá nhân
 
 PowerShell:
 
-```powershell
-$env:PILLBOX_AUTH_FILE="gateway/auth.local.json"
-python -m gateway.app
-```
+~~~powershell
+Copy-Item include/config/Secrets.example.h include/config/Secrets.h
+~~~
 
-Git Bash:
+Git Bash/Linux/macOS:
 
-```bash
-export PILLBOX_AUTH_FILE="gateway/auth.local.json"
-python -m gateway.app
-```
+~~~bash
+cp include/config/Secrets.example.h include/config/Secrets.h
+~~~
 
-Nhập token cá nhân vào ô Khóa truy cập API trên Dashboard rồi Kết nối. Family chỉ hộp được gán; nurse được refill/audit trong phạm vi; admin được cập nhật lịch. Actor từ phiên xác thực, không tin actor_id tự gửi. Khi gọi API bằng curl, thêm header Authorization: Bearer TOKEN_CUA_BAN.
+Nếu đã có Secrets.h, chỉnh file hiện có, không sao chép đè. Tự điền:
 
-Đây là bearer auth đơn giản, chưa có JWT/password login, HTTPS hoặc broker ACL/TLS. Không mở chế độ demo chưa auth ra Internet. Chi tiết [SECURITY.md](docs/SECURITY.md).
+~~~cpp
+#pragma once
+#define PILLBOX_WIFI_SSID "TEN_WIFI_CUA_BAN"
+#define PILLBOX_WIFI_PASSWORD "MAT_KHAU_WIFI_CUA_BAN"
+#define PILLBOX_MQTT_HOST "test.mosquitto.org"
+#define PILLBOX_MQTT_PORT 1883
+#define PILLBOX_MQTT_USER ""
+#define PILLBOX_MQTT_PASSWORD ""
+~~~
 
-## Command từ API
+Firmware và Gateway phải cùng broker. Theo hướng dẫn này, giữ credential trống và chỉ dùng dữ liệu ẩn danh. Gateway hiện chưa cấu hình tài khoản/TLS MQTT qua biến môi trường.
 
-Ví dụ Git Bash (PowerShell có thể dùng Invoke-RestMethod):
+### 9.2. Đấu nối và đặt RTC
 
-```bash
-curl -X POST http://127.0.0.1:5000/api/devices/PB01/commands \
-  -H "Content-Type: application/json" \
-  -d '{"command":"REQUEST_STATUS"}'
-```
+GPIO phần mềm ở [include/config/Pins.h](include/config/Pins.h):
 
-Hai command còn lại: {"command":"CLEAR_ALERT"} và {"command":"UPDATE_SCHEDULE","schedule_id":"S2","hour":14,"minute":0,"enabled":true}. Không dùng slot_id để chọn lịch, vì một ngăn có nhiều lịch.
+| Linh kiện | GPIO/giao tiếp |
+|---|---|
+| RTC DS3231 | SDA 3, SCL 4 |
+| Nút/reed switch ngăn 1/2/3 | GPIO 5/6/7 về GND, INPUT_PULLUP |
+| LED ngăn 1/2/3 | GPIO 8/9/10, điện trở nối tiếp phù hợp |
+| Buzzer active | GPIO 11 qua driver phù hợp tải |
+| DHT22 | GPIO 12 |
 
-HTTP202 nghĩa đã gửi yêu cầu tới broker, chưa phải đã áp dụng. Xem /api/devices/PB01/commands để chờ APPLIED/REJECTED; DB chỉ đổi lịch khi nhận ACK khớp và firmware đã lưu NVS. Broker không khả dụng trả503. CLEAR_ALERT chỉ tắt âm/đèn; không hoàn tất lịch.
+Đối chiếu chân header đúng revision board trước đấu dây. GPIO là 3.3 V; không đưa trực tiếp tín hiệu 5 V vào GPIO. Buzzer tải 5 V cần mạch điều khiển phù hợp.
 
-## Chạy trên board thật
+Đặt **DS3231 đúng giờ Việt Nam** bằng công cụ/sketch thiết lập RTC trước khi chạy. Firmware chưa có API chỉnh RTC thật; RTC mất nguồn/chưa hợp lệ sẽ dùng fallback thời gian chưa đồng bộ. DS1307 của Wokwi không thay thế DS3231 trong cấu hình production.
 
-Tạo Secrets.h từ mẫu và tự điền thông tin mạng. Kiểm tra đấu nối theo [HARDWARE.md](docs/HARDWARE.md), đặt RTC DS3231 đúng giờ Việt Nam; RTC mất nguồn/chưa hợp lệ sẽ dùng fallback unsynchronized.
+### 9.3. Upload và Serial
 
-```bash
+Dùng cáp USB có truyền dữ liệu. Trong PlatformIO CLI terminal:
+
+~~~bash
 pio run -e adafruit_feather_esp32s2 -t upload
 pio device monitor -e adafruit_feather_esp32s2
-```
+~~~
 
-Board thật không có Serial TIME. Chưa có kiểm thử phần cứng, HX711 concrete driver, đo pin hoặc Deep Sleep. Interface LoadcellDriver hiện chỉ là hợp đồng để bổ sung sau.
+Nếu thiếu pio, dùng executable ở bước 6 và thay tên environment. Serial 115200. Chạy Gateway theo bước 5, chờ PB01 online rồi kiểm tra thiết bị. Board thật không có lệnh TIME của simulation.
 
-## Kiểm thử và mức bằng chứng
+## 10. Xác thực và phân quyền — tùy chọn
 
-```bash
-python -m unittest discover -s gateway/tests -t . -v
-pio test -e native
-python -m gateway.tests.mqtt_e2e
-node --check gateway/static/dashboard.js
-```
+Mặc định Gateway chỉ bind localhost, chưa yêu cầu khóa. Để dùng tài khoản riêng:
 
-Trên máy Windows dùng MSYS2 UCRT64, thêm thư mục DLL vào PATH trước native/host test.
+1. Sao chép [gateway/auth.example.json](gateway/auth.example.json) thành **gateway/auth.local.json**.
+2. Tạo khóa ngẫu nhiên khác nhau cho từng tài khoản.
+3. Thay toàn bộ tên key REPLACE_WITH... trong file local.
+4. Chỉnh actor_id, role và devices theo phạm vi sử dụng.
 
 PowerShell:
 
-```powershell
+~~~powershell
+Copy-Item gateway/auth.example.json gateway/auth.local.json
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
+~~~
+
+Git Bash Windows:
+
+~~~bash
+cp gateway/auth.example.json gateway/auth.local.json
+./.venv/Scripts/python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
+~~~
+
+Linux/macOS dùng **./.venv/bin/python** để tạo khóa. Tự chép khóa vào file local và lưu riêng. Máy chủ từ chối placeholder chưa thay.
+
+| Role | Quyền |
+|---|---|
+| family | Xem hộp được gán; yêu cầu trạng thái/tắt nhắc |
+| nurse | Xem hộp được phân công; verify/confirm và xem lịch sử nạp |
+| admin | Tất cả hộp; gửi cập nhật lịch |
+
+Dừng Gateway bằng Ctrl+C. Tại terminal đã đặt biến ở bước 5, bổ sung:
+
+PowerShell:
+
+~~~powershell
+$env:PILLBOX_AUTH_FILE="gateway/auth.local.json"
+.\.venv\Scripts\python.exe -m gateway.app
+~~~
+
+Git Bash Windows:
+
+~~~bash
+export PILLBOX_AUTH_FILE="gateway/auth.local.json"
+./.venv/Scripts/python.exe -m gateway.app
+~~~
+
+Linux/macOS dùng cùng export, rồi chạy **./.venv/bin/python -m gateway.app**.
+
+Trên Dashboard: **Tài khoản → nhập khóa → Kết nối**. Gọi API trực tiếp cần header **Authorization: Bearer KHOA_CUA_BAN**.
+
+Tắt auth cục bộ: dừng Gateway, bỏ biến rồi chạy lại.
+
+~~~powershell
+Remove-Item Env:PILLBOX_AUTH_FILE -ErrorAction SilentlyContinue
+~~~
+
+Bash:
+
+~~~bash
+unset PILLBOX_AUTH_FILE
+~~~
+
+Đây là bearer auth đơn giản, chưa có JWT/password login hoặc HTTPS. Không mở Gateway chưa xác thực ra Internet.
+
+## 11. Dữ liệu, backup và cập nhật sau pull
+
+### File cá nhân không có trong Git
+
+| File/thông tin | Sau clone cần làm gì? |
+|---|---|
+| .venv/ | Tự tạo và cài Python dependencies |
+| .pio/ | Tự build bằng PlatformIO |
+| include/config/Secrets.h | Tự tạo nếu dùng board thật |
+| Wokwi license/CLI token | Tự kích hoạt hoặc nhập trên máy |
+| gateway/auth.local.json | Tự tạo nếu bật auth |
+| gateway/data/pillbox.db | Gateway tự tạo lần đầu |
+| gateway/data/backups/ | Chỉ có sau khi reset trên máy đó |
+
+Không dùng git add -f để đưa key, mật khẩu, DB hoặc backup vào repository.
+
+### Sau mỗi lần pull
+
+1. Dừng Gateway và simulator.
+2. **git pull --ff-only**.
+3. Cài lại dependencies theo bước 4 nếu requirements thay đổi.
+4. Build lại firmware.
+5. Đặt biến môi trường, chạy Gateway rồi Start Simulator.
+6. **Ctrl+Shift+R** trên Dashboard để tránh JS/CSS cũ.
+
+Database cá nhân không được thay bằng DB từ Git. Migration giữ dữ liệu cũ; seed dùng INSERT OR IGNORE nên không tự ghi đè tên/lịch đã có.
+
+### Tạo lại dữ liệu — thao tác có xóa bản ghi
+
+Chỉ dùng khi chủ động muốn xóa dữ liệu cũ. **Dừng Gateway trước**. Lệnh tạo backup đầy đủ rồi reset lịch sử/cấu hình trong DB đã chọn.
+
+PowerShell:
+
+~~~powershell
+.\.venv\Scripts\python.exe -m gateway.reset_data --db gateway/data/pillbox.db
+~~~
+
+Git Bash Windows:
+
+~~~bash
+./.venv/Scripts/python.exe -m gateway.reset_data --db gateway/data/pillbox.db
+~~~
+
+Linux/macOS thay executable bằng **./.venv/bin/python**.
+
+Backup ở **gateway/data/backups/<thời điểm>/pillbox.db**. Khôi phục bằng cách dừng Gateway rồi chép file backup đúng tên đè lên DB tương ứng. Reset DB không xóa ledger NVS của ESP32.
+
+## 12. Kiểm thử — tùy chọn
+
+Không cần chạy các kiểm thử này để mở Dashboard.
+
+### Gateway, phân trang, auth và reset
+
+Mở terminal kiểm thử riêng. Không bật auth/MQTT autostart cho app factory trong unit tests.
+
+PowerShell:
+
+~~~powershell
+$env:PILLBOX_MQTT_AUTOSTART="0"
+Remove-Item Env:PILLBOX_AUTH_FILE -ErrorAction SilentlyContinue
+.\.venv\Scripts\python.exe -m unittest discover -s gateway/tests -t . -v
+~~~
+
+Git Bash Windows:
+
+~~~bash
+export PILLBOX_MQTT_AUTOSTART="0"
+unset PILLBOX_AUTH_FILE
+./.venv/Scripts/python.exe -m unittest discover -s gateway/tests -t . -v
+~~~
+
+Linux/macOS dùng **./.venv/bin/python**. Hiện có 33 test, sử dụng DB tạm.
+
+### MQTT hai chiều qua broker thật
+
+Tại terminal kiểm thử chưa bật auth/autostart, PowerShell:
+
+~~~powershell
+.\.venv\Scripts\python.exe -m gateway.tests.mqtt_e2e
+~~~
+
+Git Bash dùng **./.venv/Scripts/python.exe**, Linux/macOS dùng **./.venv/bin/python**. Script dùng PBTEST ngẫu nhiên và DB tạm, không ghi vào Dashboard cá nhân. Đây là MQTT device tổng hợp, không chứng minh GPIO/queue firmware đã chạy trên Wokwi/board.
+
+### Native và host C++
+
+Trong PlatformIO CLI terminal:
+
+~~~bash
+pio test -e native
+~~~
+
+Nếu Windows đã cài MSYS2 UCRT64 nhưng compiler thiếu DLL:
+
+~~~powershell
 $env:PATH="C:\msys64\ucrt64\bin;" + $env:PATH
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" test -e native
+~~~
+
+Host harness bổ sung các ca lấy muộn/reboot/overlap/FIFO/môi trường. Chạy trong terminal có g++:
+
+~~~powershell
+New-Item -ItemType Directory -Force .pio | Out-Null
 g++ -std=c++11 -Iinclude test/host_scheduler/main.cpp src/app/Scheduler.cpp -o .pio/host_scheduler.exe
-& .\.pio\host_scheduler.exe
-```
+if ($LASTEXITCODE -eq 0) { & .\.pio\host_scheduler.exe }
+~~~
 
-Git Bash:
+MSYS2/native không phải điều kiện chạy Gateway hoặc build firmware ESP32 bằng PlatformIO.
 
-```bash
-export PATH="/c/msys64/ucrt64/bin:$PATH"
-g++ -std=c++11 -Iinclude test/host_scheduler/main.cpp src/app/Scheduler.cpp -o .pio/host_scheduler.exe
-./.pio/host_scheduler.exe
-```
+### Giao diện desktop/mobile
 
-Host test bao gồm ledger/reboot, midnight, overlap, late expiry, FIFO overflow và môi trường. Native Unity có4 test. Broker test dùng mã PBTEST ngẫu nhiên và database tạm, không đổ dữ liệu vào Dashboard đang chạy. Nó kiểm tra MQTT v2, occurrence, ba command/ACK, sensor error, refill và synthetic reconnect.
+Cần Node.js 22+, Gateway localhost đang chạy **chưa bật auth**, cấu hình PB01/PB02 và Edge/Chromium với profile riêng.
 
-Các lệnh đã chạy ngày10/11/2026: Gateway28/28 PASS; native4/4 PASS; host PASS; hai build PASS; broker synthetic PASS. Đây không phải kết quả Wokwi/hardware. Xem [TEST_MATRIX.md](docs/TEST_MATRIX.md) và [QUALITY_REPORT.md](docs/QUALITY_REPORT.md) để biết giới hạn.
+PowerShell, với Edge tại vị trí mặc định:
 
-## Giới hạn và tài liệu
+~~~powershell
+New-Item -ItemType Directory -Force .pio | Out-Null
+$browserProfile=Join-Path (Get-Location).Path ".pio\ui-preview-profile"
+$profileArgument='--user-data-dir="' + $browserProfile + '"'
+$browserArguments=@(
+  "--headless=new",
+  "--disable-gpu",
+  "--no-first-run",
+  "--remote-debugging-port=9334",
+  $profileArgument,
+  "about:blank"
+)
+Start-Process -FilePath "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" -ArgumentList $browserArguments -WindowStyle Hidden
+node test/ui_dashboard.mjs
+~~~
 
-Queue RAM không sống qua reset; publish thành công chưa chứng minh SQLite commit. Chưa có ACK ứng dụng cho event. Theo dõi trễ dừng ở ngày địa phương mới, chưa hỗ trợ cửa sổ xuyên nửa đêm. Ledger NVS không phải durable event outbox. Board PB01 có4 lịch cố định; PB02 hiện chỉ là seed phía server.
+Sửa đường dẫn Edge nếu cài ở nơi khác. Script kiểm menu cố định, ảnh/favicon, đổi hộp, phân trang và trạng thái form. POST refill/GET phân trang thử được mock riêng, không tạo audit giả vào DB đang chạy. Ảnh kết quả tại **.pio/ui-desktop.png** và **.pio/ui-mobile.png**.
 
-Public broker1883 không mã hóa/xác thực, chỉ dùng dữ liệu giả. Key Wokwi/Wi-Fi/API mỗi người tự nhập sau pull, không đưa vào Git.
+Đóng riêng browser kiểm thử ở CDP9334 bằng lệnh sau; không dùng với profile trình duyệt cá nhân:
 
-- [Kiến trúc](docs/ARCHITECTURE.md), [state machine](docs/STATE_MACHINE.md), [quy tắc lấy thuốc](docs/ADHERENCE_RULES.md)
-- [MQTT](docs/MQTT.md), [lưu trữ/migration](docs/PERSISTENCE.md), [bảo mật](docs/SECURITY.md)
-- [Phần cứng](docs/HARDWARE.md), [demo và checklist runtime](docs/DEMO_SCRIPT.md)
-- [Ma trận test](docs/TEST_MATRIX.md), [báo cáo chất lượng](docs/QUALITY_REPORT.md), [trạng thái](docs/PROJECT_STATUS.md)
-- [Ánh xạ đề cương](docs/COURSE_REQUIREMENTS_MAPPING.md), [checklist cuối](docs/FINAL_CHECKLIST.md)
+~~~powershell
+node --input-type=module -e "const info=await(await fetch('http://127.0.0.1:9334/json/version')).json();const socket=new WebSocket(info.webSocketDebuggerUrl);socket.addEventListener('open',()=>socket.send(JSON.stringify({id:1,method:'Browser.close'})));"
+~~~
+
+Các kiểm tra đã thực thi trên máy phát triển: hai build PASS, Gateway 33/33 PASS, native 4/4 PASS, host harness PASS, synthetic broker và browser smoke PASS. Không dùng các kết quả này thay cho kiểm GPIO, NVS/mất nguồn, offline/reconnect và board thật trên máy mới.
+
+## 13. Lỗi thường gặp
+
+| Hiện tượng | Cách xử lý |
+|---|---|
+| No module named flask/paho | Cài requirements bằng đúng Python trong .venv, chạy Gateway bằng executable đó |
+| No module named gateway | Quay về thư mục gốc chứa platformio.ini, không chạy từ gateway/ |
+| PowerShell chặn Activate.ps1 | Không cần đổi ExecutionPolicy; gọi trực tiếp .venv/Scripts/python.exe |
+| Git Bash báo syntax near & | Dùng nhầm cú pháp PowerShell; chuyển sang khối Git Bash |
+| Không nhận pio | Dùng PlatformIO CLI terminal hoặc executable ở bước 6; chờ extension cài xong |
+| Wokwi báo firmware.bin not found | Mở đúng workspace và build esp32s2_wokwi trước Start Simulator |
+| Wokwi license expired | Yêu cầu license mới, nhập thủ công rồi reload VS Code |
+| Web mở nhưng PB01 offline | Kiểm tra thiết bị, mạng, MQTT_AUTOSTART và cùng broker; chờ heartbeat |
+| PB01 chập chờn khi nhiều người chạy | Firmware dùng cùng client ID/topic PB01 trên public broker; dừng bản trùng hoặc dùng broker riêng đã cấu hình đồng bộ |
+| Sửa Secrets.h nhưng broker simulation không đổi | Simulation lấy host ở nhánh PILLBOX_SIMULATION của AppConfig.h; nếu đổi phải sửa đúng nhánh và build lại |
+| Chưa có DHT | Chờ chu kỳ publish khoảng 60s; kiểm tra DHT và topic environment |
+| Giao diện cũ sau pull | Ctrl+Shift+R; nếu thay HTML, dừng/chạy lại Gateway |
+| API 401/403 | Kiểm tra khóa trong Tài khoản, role và devices trong auth.local.json |
+| Verify mismatch | Đối chiếu hộp/hồ sơ/ngăn/mã bao bì; không sửa mã dự kiến để ép confirm |
+| HTTP 503 khi gửi command | Gateway chưa kết nối broker; kiểm tra mạng và MQTT_AUTOSTART |
+| Cổng5000 đã bị dùng | Dừng đúng Gateway cũ hoặc đặt PORT=5001 rồi mở URL cổng mới |
+| RTC thật sai/mất nguồn | Đặt lại DS3231; firmware không tự đồng bộ RTC từ mạng |
+
+Không dùng git reset --hard, xóa project hoặc xóa DB để xử lý lỗi cài đặt thông thường.
+
+## 14. Cấu trúc và giới hạn
+
+~~~text
+Pill_Box/
+├── README.md
+├── platformio.ini
+├── diagram.json
+├── wokwi.toml
+├── include/
+│   ├── app/                 Scheduler, AppController
+│   ├── communication/       MQTT, Wi-Fi
+│   ├── config/              Pins, AppConfig, Secrets.example.h
+│   ├── domain/              EventBuffer, StorageMonitor, model
+│   ├── drivers/             RTC, nút, LED, buzzer, DHT
+│   └── storage/             NVS
+├── src/                     Triển khai firmware và main.cpp
+├── gateway/
+│   ├── app.py               Flask API và trang web
+│   ├── mqtt_service.py      MQTT/payload
+│   ├── db.py, schema.py     Migration, seed, SQLite
+│   ├── auth.py              Bearer identity/scope
+│   ├── reset_data.py        Backup/reset DB
+│   ├── requirements.txt
+│   ├── auth.example.json
+│   ├── templates/           HTML
+│   ├── static/              CSS, JS, favicon, ảnh
+│   └── tests/               Gateway/broker tests
+└── test/                    Native, host, browser tests
+~~~
+
+- Event có identity theo boot/seq; Gateway chống trùng, tách log cảnh báo khỏi kết quả occurrence.
+- Queue RAM giữ 16 sự kiện chờ và tối đa 1 bản đang gửi; đầy sẽ bỏ bản chờ cũ nhất và tăng bộ đếm. Reset/mất điện có thể mất dữ liệu RAM.
+- Publish thành công chưa chứng minh SQLite đã commit; chưa có application ACK cho event. Command có ACK riêng.
+- Ledger NVS hạn chế completion lặp, không phải durable event outbox.
+- Chưa hỗ trợ lấy trễ xuyên ngày địa phương; firmware PB01 có 4 lịch cấu hình sẵn.
+- HX711 mới có interface, chưa có driver đọc/cân/hiệu chuẩn. Deep Sleep và thời lượng pin chưa được kiểm chứng.
+- HTTP/MQTT 1883 dùng cho môi trường thử nghiệm cục bộ; chưa có TLS/ACL production.
+
+Ảnh giao diện đã tải sẵn, không cần tải lại khi chạy: [Anna Shvets — Pexels](https://www.pexels.com/photo/photo-medication-pills-on-white-plastic-container-3683074/) và [Polina Tankilevitch — Pexels](https://www.pexels.com/photo/photo-of-pills-on-container-3873162/), theo [Pexels License](https://www.pexels.com/license/). Ảnh minh họa không nhận diện viên thuốc trong từng ngăn.
