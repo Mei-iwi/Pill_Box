@@ -1,18 +1,95 @@
 <!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Pill Box</title><link rel="stylesheet" href="/static/style.css"></head>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0757ed">
+  <title>Pillbox</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
 <body>
-<main><header><h1>Smart Pill Box</h1><p>Prototype dashboard — medication decisions remain with the caregiver.</p></header>
-<section class="cards" id="devices"></section>
-<section class="cards"><article class="card" id="environment"><h2>Storage environment</h2><p>Waiting for sensor data…</p></article><article class="card"><h2>Device control</h2><button onclick="sendCommand('REQUEST_STATUS')">Request status</button><button onclick="sendCommand('CLEAR_ALERT')">Clear alert</button><p id="command-result"></p></article></section>
-<section><h2>Recent adherence events</h2><table><thead><tr><th>Time</th><th>Event</th><th>Slot</th><th>Delay (min)</th></tr></thead><tbody id="events"></tbody></table></section>
-<section><h2>Caregiver refill verification</h2><p>Verify box, patient slot and medication code before confirming a refill. A mismatch blocks confirmation.</p><form onsubmit="verifyRefill(event)"><label>Actor <input id="actor" value="NURSE01"></label><label>Slot <input id="slot" type="number" min="1" max="3" value="1"></label><label>Medication code <input id="medication" value="MED001"></label><button>Verify</button><button type="button" onclick="confirmRefill()">Confirm</button></form><p id="refill-result"></p><div id="audit"></div></section>
-</main><script>
-async function load(){const devices=await (await fetch('/api/devices')).json();document.querySelector('#devices').innerHTML=devices.map(d=>`<article class="card"><h2>${d.device_id}</h2><p>Status: <strong>${d.status}</strong></p><p>State: ${d.state||'—'}</p><p>Last seen: ${d.last_seen||'—'}</p></article>`).join('');const events=await (await fetch('/api/devices/PB01/events')).json();document.querySelector('#events').innerHTML=events.map(e=>`<tr><td>${e.received_at}</td><td>${e.event}</td><td>${e.slot_id}</td><td>${e.delay_minutes||0}</td></tr>`).join('');const env=await (await fetch('/api/devices/PB01/environment')).json();document.querySelector('#environment').innerHTML=env.length?`<h2>Storage environment</h2><p>${env[0].temperature_c} °C · ${env[0].humidity_percent}% RH</p><p>${env[0].sensor_ok?'Sensor OK':'Sensor unavailable'}</p><small>Prototype thresholds are for demonstration only.</small>`:'<h2>Storage environment</h2><p>No readings yet.</p>';const audit=await (await fetch('/api/refill/audit')).json();document.querySelector('#audit').innerHTML=audit.slice(0,5).map(a=>`<p>${a.timestamp}: ${a.result} — ${a.box_id}, slot ${a.slot_id}</p>`).join('')||'<p>No refill audits yet.</p>';}
-async function post(url,body){const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return {ok:response.ok,status:response.status,data:await response.json()};}
-async function sendCommand(command){const r=await post('/api/devices/PB01/commands',{command});document.querySelector('#command-result').textContent=r.ok?`${command} published`:(r.data.error||`HTTP ${r.status}`);}
-function refillBody(){return {actor_id:document.querySelector('#actor').value,box_id:'PB01',slot_id:Number(document.querySelector('#slot').value),medication_code:document.querySelector('#medication').value};}
-async function verifyRefill(event){event.preventDefault();const r=await post('/api/refill/verify',refillBody());document.querySelector('#refill-result').textContent=r.data.result||r.data.error;load();}
-async function confirmRefill(){const b=refillBody();delete b.medication_code;const r=await post('/api/refill/confirm',b);document.querySelector('#refill-result').textContent=r.data.result||r.data.error;load();}
-load();setInterval(load,4000);
-</script></body></html>
+
+  <header class="topbar">
+    <a class="brand" href="#overview" aria-label="Pillbox — Tổng quan">Pillbox</a>
+    <nav class="main-nav" aria-label="Điều hướng chính">
+      <button class="nav-item active" data-view="overview" aria-current="page">Tổng quan</button>
+      <button class="nav-item" data-view="schedules">Lịch nhắc</button>
+      <button class="nav-item" data-view="history">Lịch sử</button>
+      <button class="nav-item caregiver-control" data-view="refill">Nạp thuốc</button>
+    </nav>
+    <div class="topbar-end"><span id="connection" class="connection"><i></i>Đang kết nối</span><button id="settings-open" class="account-button" aria-label="Cài đặt truy cập">Tài khoản</button></div>
+  </header>
+
+  <div class="contextbar">
+    <div class="subnav" aria-label="Chế độ xem"><button class="subnav-item active" data-view="overview">Theo dõi</button><button class="subnav-item" data-view="devices">Thiết bị</button></div>
+    <label class="device-picker"><span>Hộp thuốc</span><select id="device" aria-label="Chọn hộp thuốc"><option>PB01</option><option>PB02</option></select></label>
+  </div>
+
+  <main class="workspace">
+    <p id="error" class="notice error-notice" role="alert" hidden></p>
+    <div id="view-overview" class="view">
+      <div class="surface overview-surface">
+        <section class="hero" aria-labelledby="hero-title">
+          <div class="hero-copy">
+            <h1 id="hero-title">Hộp thuốc<br>của bạn.</h1>
+            <div class="hero-actions"><button class="button primary" data-view="schedules">Xem lịch nhắc</button><button class="text-button caregiver-control" data-view="refill">Nạp thuốc</button></div>
+            <div class="hero-meta"><span id="hero-device">PB01</span><span class="meta-divider"></span><span id="hero-patient">Người dùng P001</span><span id="hero-state" class="state-text">Đang tải…</span></div>
+          </div>
+          <div class="hero-art"><img src="/static/images/pill-organizer.jpg" alt="Hộp chia thuốc" width="1400" height="933" fetchpriority="high"></div>
+        </section>
+        <section class="metrics" aria-label="Thông tin nhanh">
+          <article class="metric"><span class="metric-label">Lịch nhắc tiếp theo</span><strong id="next-time">—</strong><span id="next-reminder" class="metric-note">Đang tải lịch nhắc</span></article>
+          <article class="metric"><span class="metric-label">Ngăn đã được gán</span><strong id="assigned-count">—<small>/ 3 ngăn</small></strong><span id="assignment-note" class="metric-note">Đang tải thông tin</span></article>
+          <article class="metric"><span class="metric-label">Môi trường bảo quản</span><strong id="environment-value">—</strong><span id="environment-status" class="metric-note">Chưa có dữ liệu cảm biến</span></article>
+        </section>
+        <section class="section-block">
+          <div class="section-heading"><div><h2>Ngăn thuốc</h2></div></div>
+          <div id="slots" class="slot-grid"><p class="empty">Đang tải các ngăn thuốc…</p></div>
+        </section>
+        <section class="section-block activity-section">
+          <div class="section-heading"><h2>Hoạt động gần đây</h2><button class="text-button" data-view="history">Xem tất cả</button></div>
+          <div id="recent-events"><p class="empty">Chưa có hoạt động.</p></div>
+        </section>
+      </div>
+    </div>
+
+    <div id="view-schedules" class="view" hidden>
+      <div class="page-heading"><div><h1>Lịch nhắc thuốc</h1></div><span class="tag neutral">Giờ Việt Nam</span></div>
+      <section class="surface section-block standalone"><div class="section-heading"><h2>Lịch đã cài đặt</h2><span id="schedule-count" class="small muted"></span></div><div class="table-wrap"><table><thead><tr><th>Lịch</th><th>Ngăn</th><th>Thuốc</th><th>Giờ nhắc</th><th>Trạng thái</th></tr></thead><tbody id="schedules"></tbody></table></div></section>
+      <section class="surface section-block standalone"><div class="section-heading"><h2>Kết quả từng lần nhắc</h2></div><div id="occurrences"></div><nav id="occurrences-pagination" class="pagination" aria-label="Phân trang kết quả"></nav></section>
+    </div>
+
+    <div id="view-history" class="view" hidden>
+      <div class="page-heading"><div><h1>Lịch sử hoạt động</h1></div></div>
+      <section class="surface section-block standalone"><div class="section-heading"><h2>Mở ngăn & cảnh báo</h2></div><div class="table-wrap"><table><thead><tr><th>Thời gian</th><th>Hoạt động</th><th>Lịch / ngăn</th><th>Trễ</th></tr></thead><tbody id="events"></tbody></table></div><nav id="events-pagination" class="pagination" aria-label="Phân trang lịch sử"></nav></section>
+      <section id="environment" class="surface section-block standalone"><h2>Môi trường bảo quản</h2><p class="empty">Chưa có dữ liệu cảm biến.</p></section>
+    </div>
+
+    <div id="view-refill" class="view" hidden>
+      <div class="page-heading"><div><h1>Nạp thuốc</h1></div><span class="tag neutral">Xác minh → Xác nhận</span></div>
+      <section id="refill-panel" class="surface section-block standalone">
+        <img class="refill-photo" src="/static/images/medication-container.jpg" alt="Hộp đựng và sắp xếp thuốc" width="1200" height="800" loading="lazy">
+        <div class="section-heading"><div><h2>Xác minh thuốc</h2></div></div>
+        <form id="refill-form" onsubmit="verifyRefill(event)">
+          <div class="form-grid"><label id="actor-field">Mã người chăm sóc<input id="actor" value="NURSE01" required autocomplete="off"></label><label>Mã người dùng<input id="patient" value="P001" required autocomplete="off"></label><label>Ngăn thuốc<select id="slot"><option value="1">Ngăn 1</option><option value="2">Ngăn 2</option><option value="3">Ngăn 3</option></select></label><label>Mã trên bao bì<input id="medication" placeholder="Nhập hoặc quét mã" required autocomplete="off"></label></div>
+          <div id="refill-context" class="refill-context">Hộp PB01 · Ngăn 1 · MED001</div>
+          <div class="form-actions"><button class="button primary" type="submit">Xác minh mã</button><button class="button secondary" id="confirm" type="button" onclick="confirmRefill()" disabled>Xác nhận nạp</button></div>
+        </form>
+        <p id="refill-result" class="inline-message" role="status" hidden></p>
+      </section>
+      <section class="surface section-block standalone"><div class="section-heading"><h2>Lịch sử nạp thuốc</h2></div><div id="audit"></div><nav id="audit-pagination" class="pagination" aria-label="Phân trang nạp thuốc"></nav></section>
+    </div>
+
+    <div id="view-devices" class="view" hidden>
+      <div class="page-heading"><div><h1>Thiết bị</h1></div></div>
+      <div id="devices" class="device-grid"></div>
+      <section class="surface section-block standalone"><div class="section-heading"><h2>Điều khiển hộp đang chọn</h2><span id="control-device" class="tag neutral">PB01</span></div><div class="form-actions"><button class="button primary" onclick="sendCommand('REQUEST_STATUS')">Cập nhật trạng thái</button><button class="button secondary" onclick="sendCommand('CLEAR_ALERT')">Tắt âm & đèn nhắc</button></div><p id="command-result" class="inline-message" role="status" hidden></p><div id="commands" class="command-list"></div><nav id="commands-pagination" class="pagination" aria-label="Phân trang lệnh"></nav></section>
+    </div>
+
+  </main>
+
+  <dialog id="settings-dialog"><div class="dialog-heading"><h2>Truy cập hệ thống</h2><button id="settings-close" class="icon-button" aria-label="Đóng">×</button></div><p id="session" class="section-note">Đang kiểm tra kết nối…</p><label>Khóa truy cập API<input id="access-token" type="password" autocomplete="off" placeholder="Nhập khóa cá nhân"></label><button id="login" class="button primary">Kết nối</button></dialog>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

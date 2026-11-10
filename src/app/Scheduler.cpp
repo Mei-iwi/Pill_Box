@@ -1,93 +1,165 @@
 #include "app/Scheduler.h"
+#include <string.h>
 
 Scheduler::Scheduler() { loadDefaults(); }
 
 void Scheduler::loadDefaults() {
-#ifdef PILLBOX_SIMULATION
-    schedules_[0] = {"S1", 1, 8, 0, true, 0, 1};
-    schedules_[1] = {"S2", 2, 8, 2, true, 0, 1};
-    schedules_[2] = {"S3", 3, 8, 4, true, 0, 1};
-#else
-    schedules_[0] = {"S1", 1, 8, 0, true, 5, 120};
-    schedules_[1] = {"S2", 2, 14, 0, true, 5, 120};
-    schedules_[2] = {"S3", 3, 20, 0, true, 5, 120};
-#endif
-    active_ = false;
-    eventReady_ = false;
-    lastMinute_ = 1440;
-    lastReminderMinute_ = 1440;
+    schedules_[0] = {"S1", "MED001", 1, 8, 0, true, 15, 240};
+    schedules_[1] = {"S2", "MED001", 1, 14, 0, true, 15, 240};
+    schedules_[2] = {"S3", "MED002", 2, 9, 0, true, 15, 240};
+    schedules_[3] = {"S4", "MED003", 3, 20, 0, true, 15, 240};
+    for (uint8_t i = 0; i < MAX_SCHEDULES; ++i) {
+        occurrences_[i] = {};
+    }
+    eventHead_ = 0;
+    eventCount_ = 0;
+    currentDay_ = 0;
+    ledger_ = {};
 }
 
-void Scheduler::queue(EventType type, uint8_t slot, const char* id, uint16_t scheduled, uint16_t occurred, int16_t delay) {
-    if (eventReady_) return;
-    pending_ = {type, slot, id, scheduled, occurred, delay};
-    eventReady_ = true;
+void Scheduler::resetForDay(uint32_t dayKey) {
+    if (currentDay_ == dayKey) return;
+    currentDay_ = dayKey;
+    for (auto& occurrence : occurrences_) occurrence = {};
 }
 
-void Scheduler::update(uint16_t currentMinute) {
-    if (currentMinute > 1439) return;
-    if (lastMinute_ > currentMinute + 1) lastReminderMinute_ = 1440; // midnight rollover
-    lastMinute_ = currentMinute;
+void Scheduler::queue(EventType type, uint8_t slot, const char* id, uint16_t scheduled,
+                      uint16_t occurred, int16_t delay, uint32_t dayKey,
+                      uint32_t scheduledEpoch, uint32_t occurredEpoch) {
+    if (eventCount_ >= EVENT_QUEUE_SIZE) return;
+    const uint8_t tail = (eventHead_ + eventCount_) % EVENT_QUEUE_SIZE;
+    events_[tail] = {type, slot, id, scheduled, occurred, delay, dayKey, scheduledEpoch, occurredEpoch};
+    ++eventCount_;
+}
 
-    if (active_) {
-        const uint16_t elapsed = currentMinute >= activeSchedule_.hour * 60 + activeSchedule_.minute
-            ? currentMinute - (activeSchedule_.hour * 60 + activeSchedule_.minute) : 0;
-        if (elapsed > activeSchedule_.onTimeWindowMinutes + activeSchedule_.lateTrackingWindowMinutes) {
-            queue(EventType::MISSED, activeSchedule_.slotId, activeSchedule_.scheduleId,
-                  activeSchedule_.hour * 60 + activeSchedule_.minute, currentMinute, 0);
-            active_ = false;
+void Scheduler::update(uint32_t dayKey, uint16_t currentMinute, uint32_t currentEpoch) {
+    if (currentMinute > 1439 || dayKey == 0) return;
+    resetForDay(dayKey);
+
+    for (uint8_t i = 0; i < MAX_SCHEDULES; ++i) {
+        const Schedule& schedule = schedules_[i];
+        const uint16_t scheduledMinute = schedule.hour * 60 + schedule.minute;
+        if (schedule.enabled && currentMinute >= scheduledMinute &&
+            currentMinute - scheduledMinute <= schedule.lateTrackingWindowMinutes &&
+            ledger_.completed[i] != dayKey && !occurrences_[i].active) {
+            const uint32_t scheduledEpoch = currentEpoch > 0 ? currentEpoch - (currentEpoch % 60U) - (currentMinute - scheduledMinute) * 60UL : 0;
+            occurrences_[i] = {true, ledger_.missed[i] == dayKey, schedule, dayKey, scheduledMinute, scheduledEpoch};
+            if (ledger_.started[i] != dayKey) {
+                ledger_.started[i] = dayKey;
+                queue(EventType::REMINDER_STARTED, schedule.slotId, schedule.scheduleId,
+                      scheduledMinute, currentMinute, 0, dayKey, scheduledEpoch, currentEpoch);
+            }
         }
     }
 
-    for (const auto& schedule : schedules_) {
-        const uint16_t scheduledMinute = schedule.hour * 60 + schedule.minute;
-        if (schedule.enabled && currentMinute == scheduledMinute && lastReminderMinute_ != currentMinute && !active_) {
-            activeSchedule_ = schedule;
-            active_ = true;
-            lastReminderMinute_ = currentMinute;
-            queue(EventType::REMINDER_STARTED, schedule.slotId, schedule.scheduleId, scheduledMinute, currentMinute, 0);
-            break;
+    for (uint8_t i = 0; i < MAX_SCHEDULES; ++i) {
+        auto& occurrence = occurrences_[i];
+        if (!occurrence.active || occurrence.dayKey != dayKey || currentMinute < occurrence.scheduledMinute) continue;
+        const uint16_t elapsed = currentMinute - occurrence.scheduledMinute;
+        if (!occurrence.missedEmitted && elapsed >= occurrence.schedule.onTimeWindowMinutes) {
+            occurrence.missedEmitted = true;
+            ledger_.missed[i] = dayKey;
+            queue(EventType::MISSED, occurrence.schedule.slotId, occurrence.schedule.scheduleId,
+                  occurrence.scheduledMinute, currentMinute, elapsed, dayKey,
+                  occurrence.scheduledEpoch, currentEpoch);
+        }
+        if (elapsed > occurrence.schedule.lateTrackingWindowMinutes) {
+            occurrence.active = false;
         }
     }
 }
 
 bool Scheduler::takeEvent(SchedulerEvent& event) {
-    if (!eventReady_) return false;
-    event = pending_;
-    eventReady_ = false;
+    if (eventCount_ == 0) return false;
+    event = events_[eventHead_];
+    eventHead_ = (eventHead_ + 1) % EVENT_QUEUE_SIZE;
+    --eventCount_;
     return true;
 }
 
-bool Scheduler::recordSlotOpen(uint8_t slotId, uint16_t currentMinute) {
-    if (!active_) {
-        queue(EventType::WRONG_SLOT, slotId, "NONE", currentMinute, currentMinute, 0);
+bool Scheduler::recordSlotOpen(uint8_t slotId, uint32_t dayKey, uint16_t currentMinute, uint32_t currentEpoch) {
+    if (slotId < 1 || slotId > 3 || dayKey != currentDay_ || currentMinute > 1439) return false;
+    uint8_t candidates = 0;
+    int8_t candidateIndex = -1;
+    for (uint8_t i = 0; i < MAX_SCHEDULES; ++i) {
+        const auto& occurrence = occurrences_[i];
+        if (!occurrence.active || occurrence.dayKey != dayKey || occurrence.schedule.slotId != slotId ||
+            currentMinute < occurrence.scheduledMinute) continue;
+        const uint16_t elapsed = currentMinute - occurrence.scheduledMinute;
+        if (elapsed <= occurrence.schedule.lateTrackingWindowMinutes) {
+            ++candidates;
+            candidateIndex = static_cast<int8_t>(i);
+        }
+    }
+
+    if (candidates > 1) {
+        queue(EventType::AMBIGUOUS_OPEN, slotId, "AMBIGUOUS", currentMinute, currentMinute, 0,
+              dayKey, currentEpoch, currentEpoch);
         return false;
     }
-    const uint16_t scheduled = activeSchedule_.hour * 60 + activeSchedule_.minute;
-    if (slotId != activeSchedule_.slotId) {
-        queue(EventType::WRONG_SLOT, slotId, activeSchedule_.scheduleId, scheduled, currentMinute, 0);
+
+    if (candidateIndex < 0) {
+        const int8_t activeIndex = firstActiveIndex();
+        if (activeIndex >= 0) {
+            const auto& expected = occurrences_[activeIndex];
+            queue(EventType::WRONG_SLOT, slotId, expected.schedule.scheduleId,
+                  expected.scheduledMinute, currentMinute, 0, dayKey,
+                  expected.scheduledEpoch, currentEpoch);
+        } else {
+            queue(EventType::UNSCHEDULED_OPEN, slotId, "NONE", currentMinute, currentMinute, 0,
+                  dayKey, currentEpoch, currentEpoch);
+        }
         return false;
     }
-    const uint16_t elapsed = currentMinute >= scheduled ? currentMinute - scheduled : 0;
-    if (elapsed <= activeSchedule_.onTimeWindowMinutes) {
-        queue(EventType::TAKEN_ON_TIME, slotId, activeSchedule_.scheduleId, scheduled, currentMinute, elapsed);
-        active_ = false;
-        return true;
+
+    auto& occurrence = occurrences_[candidateIndex];
+    const uint16_t elapsed = currentMinute - occurrence.scheduledMinute;
+    const EventType result = elapsed < occurrence.schedule.onTimeWindowMinutes
+        ? EventType::TAKEN_ON_TIME : EventType::TAKEN_LATE;
+    queue(result, slotId, occurrence.schedule.scheduleId, occurrence.scheduledMinute,
+          currentMinute, elapsed, dayKey, occurrence.scheduledEpoch, currentEpoch);
+    occurrence.active = false;
+    ledger_.completed[candidateIndex] = dayKey;
+    return true;
+}
+
+int8_t Scheduler::firstActiveIndex() const {
+    int8_t result = -1;
+    for (uint8_t i = 0; i < MAX_SCHEDULES; ++i) {
+        if (!occurrences_[i].active) continue;
+        if (result < 0 || occurrences_[i].scheduledMinute < occurrences_[result].scheduledMinute) result = i;
     }
-    if (elapsed <= activeSchedule_.onTimeWindowMinutes + activeSchedule_.lateTrackingWindowMinutes) {
-        queue(EventType::TAKEN_LATE, slotId, activeSchedule_.scheduleId, scheduled, currentMinute, elapsed);
-        active_ = false;
-        return true;
+    return result;
+}
+
+bool Scheduler::hasActiveReminder() const { return firstActiveIndex() >= 0; }
+
+bool Scheduler::hasOverdueReminder() const {
+    for (const auto& occurrence : occurrences_) {
+        if (occurrence.active && occurrence.missedEmitted) return true;
     }
-    queue(EventType::MISSED, slotId, activeSchedule_.scheduleId, scheduled, currentMinute, 0);
-    active_ = false;
     return false;
 }
 
-bool Scheduler::updateSchedule(uint8_t slotId, uint8_t hour, uint8_t minute, bool enabled) {
-    if (slotId < 1 || slotId > MAX_SCHEDULES || hour > 23 || minute > 59) return false;
-    schedules_[slotId - 1].hour = hour;
-    schedules_[slotId - 1].minute = minute;
-    schedules_[slotId - 1].enabled = enabled;
-    return true;
+uint8_t Scheduler::activeSlot() const {
+    const int8_t index = firstActiveIndex();
+    return index >= 0 ? occurrences_[index].schedule.slotId : 0;
+}
+
+bool Scheduler::slotReminding(uint8_t slot) const {
+    for (const auto& occurrence : occurrences_) if (occurrence.active && occurrence.schedule.slotId==slot) return true;
+    return false;
+}
+
+bool Scheduler::updateSchedule(const char* scheduleId, uint8_t hour, uint8_t minute, bool enabled) {
+    if (!scheduleId || hour > 23 || minute > 59) return false;
+    for (auto& schedule : schedules_) {
+        if (strcmp(schedule.scheduleId, scheduleId) == 0) {
+            schedule.hour = hour;
+            schedule.minute = minute;
+            schedule.enabled = enabled;
+            return true;
+        }
+    }
+    return false;
 }

@@ -3,11 +3,13 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
-#if __has_include("config/Secrets.h")
-#include "config/Secrets.h"
-#elif defined(PILLBOX_SIMULATION)
+#if defined(PILLBOX_SIMULATION)
+#undef PILLBOX_WIFI_SSID
+#undef PILLBOX_WIFI_PASSWORD
 #define PILLBOX_WIFI_SSID "Wokwi-GUEST"
 #define PILLBOX_WIFI_PASSWORD ""
+#elif __has_include("config/Secrets.h")
+#include "config/Secrets.h"
 #else
 #define PILLBOX_WIFI_SSID ""
 #define PILLBOX_WIFI_PASSWORD ""

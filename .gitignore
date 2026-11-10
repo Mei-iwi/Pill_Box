@@ -6,6 +6,8 @@
 src/config/Secrets.h
 include/config/Secrets.h
 gateway/.env
+gateway/auth.local.json
 gateway/data/*.db
+gateway/data/backups/
 __pycache__/
 *.pyc

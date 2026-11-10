@@ -1,121 +1,280 @@
-"""Real-broker integration check using a synthetic PB01 MQTT device.
+"""Real-broker synthetic test; never claims ESP32/Wokwi runtime."""
 
-This proves Broker -> Gateway -> SQLite -> Flask API/dashboard and the reverse
-command path. It does not claim ESP32/Wokwi execution.
-"""
 import json
 import os
-import sqlite3
 import tempfile
 import threading
 import time
 import uuid
+from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
 from gateway.app import create_app
-from gateway.db import init_db
+from gateway.db import connect, init_db
 from gateway.mqtt_service import start_mqtt
 
 
-HOST = os.getenv("MQTT_HOST", "test.mosquitto.org")
-PORT = int(os.getenv("MQTT_PORT", "1883"))
-
-
-def wait_until(predicate, label, timeout=15):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+def wait_until(predicate, label, timeout=20):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         if predicate():
             return
         time.sleep(0.1)
     raise TimeoutError(label)
 
 
-def scalar(db_path, sql, args=()):
-    with sqlite3.connect(db_path) as db:
-        return db.execute(sql, args).fetchone()[0]
-
-
 def main():
-    db_file = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    db_file.close()
-    init_db(db_file.name)
-    gateway = start_mqtt(db_file.name, HOST, PORT, f"pillbox-gateway-e2e-{uuid.uuid4().hex[:8]}")
-    wait_until(gateway.is_connected, "gateway MQTT connection")
+    host = os.getenv("MQTT_HOST", "test.mosquitto.org")
+    port = int(os.getenv("MQTT_PORT", "1883"))
+    did = "PBTEST_" + uuid.uuid4().hex[:10]
+    boot = uuid.uuid4().hex
+    subscribed = threading.Event()
+    clients = []
+    with tempfile.TemporaryDirectory() as directory:
+        path = str(Path(directory) / "e2e.db")
+        init_db(path)
+        with connect(path) as db:
+            db.execute(
+                "INSERT INTO devices(device_id,patient_id) VALUES (?, 'P001')", (did,)
+            )
+            for sid, hour in (("TEST_S1", 8), ("TEST_S2", 14)):
+                db.execute(
+                    "INSERT INTO schedules(schedule_id,device_id,slot_id,medication_code,hour,minute) VALUES (?,?,1,'MED001',?,0)",
+                    (sid, did, hour),
+                )
 
-    base = int(time.time()) % 1_000_000 * 100
-    command_received = threading.Event()
-    received_commands = []
-    device = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"pillbox-device-e2e-{uuid.uuid4().hex[:8]}")
+        def scalar(sql, args=()):
+            with connect(path) as db:
+                return db.execute(sql, args).fetchone()[0]
 
-    def on_connect(client, userdata, flags, reason_code, properties):
-        client.subscribe("pillbox/PB01/command", qos=1)
+        def publish(kind, payload):
+            payload["device_id"] = did
+            result = device.publish(f"pillbox/{did}/{kind}", json.dumps(payload), qos=1)
+            result.wait_for_publish(timeout=10)
+            assert result.is_published(), "publish timeout"
 
-    def on_message(client, userdata, message):
-        command = json.loads(message.payload)
-        received_commands.append(command)
-        command_received.set()
-        if command.get("command") == "REQUEST_STATUS":
-            client.publish("pillbox/PB01/status", json.dumps({"device_id":"PB01","status":"online","state":"IDLE","seq":base + 90}), qos=1)
+        def event(name, seq, at, sid="TEST_S1", slot=1, delay=0):
+            scheduled = "14:00" if sid == "TEST_S2" else "08:00"
+            return {
+                "schema_version": 2,
+                "event_id": f"{did}:{boot}:{seq}",
+                "boot_id": boot,
+                "seq": seq,
+                "event": name,
+                "slot_id": slot,
+                "schedule_id": sid,
+                "occurrence_id": f"{did}:{sid}:20261110" if slot else None,
+                "scheduled_at": f"2026-11-10T{scheduled}:00+07:00",
+                "occurred_at": f"2026-11-10T{at}:00+07:00",
+                "device_time_quality": "synthetic",
+                "delay_minutes": delay,
+            }
 
-    device.on_connect = on_connect
-    device.on_message = on_message
-    device.connect(HOST, PORT, 15)
-    device.loop_start()
-    wait_until(device.is_connected, "device MQTT connection")
+        def on_connect(client, userdata, flags, reason, properties):
+            client.subscribe(f"pillbox/{did}/command", qos=1)
 
-    app = create_app({"DB_PATH": db_file.name, "MQTT_CLIENT": gateway})
-    api = app.test_client()
+        def on_message(client, userdata, message):
+            command = json.loads(message.payload)
+            ack = {
+                "device_id": did,
+                "status": "online",
+                "state": "IDLE",
+                "command_id": command["command_id"],
+                "command": command["command"],
+                "command_result": "APPLIED",
+            }
+            if command["command"] == "UPDATE_SCHEDULE":
+                ack["schedules"] = [command]
+            client.publish(f"pillbox/{did}/status", json.dumps(ack), qos=1)
 
-    device.publish("pillbox/PB01/heartbeat", json.dumps({"device_id":"PB01","status":"online","state":"IDLE","seq":base + 1}), qos=1)
-    events = [
-        ("REMINDER_STARTED", 1, 0), ("TAKEN_ON_TIME", 1, 3),
-        ("WRONG_SLOT", 1, 0), ("MISSED", 2, 0), ("TAKEN_LATE", 3, 30),
-        ("STORAGE_WARNING", 0, 0),
-    ]
-    for offset, (name, slot, delay) in enumerate(events, 2):
-        device.publish("pillbox/PB01/event", json.dumps({"device_id":"PB01","event":name,"slot_id":slot,"schedule_id":f"S{slot}","scheduled_minute":480,"occurred_minute":480+delay,"delay_minutes":delay,"seq":base+offset}), qos=1)
-    device.publish("pillbox/PB01/environment", json.dumps({"device_id":"PB01","temperature_c":31.5,"humidity_percent":72.0,"sensor_ok":True,"seq":base+20}), qos=1)
-
-    wait_until(lambda: scalar(db_file.name, "SELECT COUNT(*) FROM medication_events WHERE seq BETWEEN ? AND ?", (base+2, base+7)) == 6, "event inserts")
-    wait_until(lambda: scalar(db_file.name, "SELECT COUNT(*) FROM environment_readings WHERE device_id='PB01'") >= 1, "environment insert")
-    assert api.get("/").status_code == 200
-    assert api.get("/api/devices/PB01/status").get_json()["status"] == "online"
-
-    command_response = api.post("/api/devices/PB01/commands", json={"command":"REQUEST_STATUS"})
-    assert command_response.status_code == 202
-    wait_until(command_received.is_set, "device command receipt")
-    wait_until(lambda: api.get("/api/devices/PB01/status").get_json()["last_seq"] == base + 90, "command response status")
-
-    duplicate = {"device_id":"PB01","event":"TAKEN_ON_TIME","slot_id":1,"schedule_id":"S1","scheduled_minute":480,"occurred_minute":481,"delay_minutes":1,"seq":base+50}
-    device.publish("pillbox/PB01/event", json.dumps(duplicate), qos=1)
-    device.publish("pillbox/PB01/event", json.dumps(duplicate), qos=1)
-    wait_until(lambda: scalar(db_file.name, "SELECT COUNT(*) FROM medication_events WHERE device_id='PB01' AND seq=?", (base+50,)) == 1, "duplicate prevention")
-
-    queued = {"device_id":"PB01","event":"TAKEN_LATE","slot_id":1,"schedule_id":"S1","scheduled_minute":480,"occurred_minute":500,"delay_minutes":20,"seq":base+60}
-    device.disconnect(); device.loop_stop()
-    offline_queue = [queued]
-    device.connect(HOST, PORT, 15); device.loop_start(); wait_until(device.is_connected, "device reconnect")
-    for payload in offline_queue:
-        device.publish("pillbox/PB01/event", json.dumps(payload), qos=1)
-    wait_until(lambda: scalar(db_file.name, "SELECT COUNT(*) FROM medication_events WHERE seq=?", (base+60,)) == 1, "reconnect sync")
-
-    verified = api.post("/api/refill/verify", json={"actor_id":"NURSE01","box_id":"PB01","slot_id":1,"medication_code":"MED001"})
-    confirmed = api.post("/api/refill/confirm", json={"actor_id":"NURSE01","box_id":"PB01","slot_id":1})
-    mismatch = api.post("/api/refill/verify", json={"actor_id":"NURSE01","box_id":"PB01","slot_id":1,"medication_code":"MED002"})
-    assert verified.get_json()["result"] == "VERIFIED" and confirmed.get_json()["result"] == "CONFIRMED"
-    assert mismatch.get_json()["result"] == "MEDICATION_MISMATCH"
-
-    report = {
-        "broker": f"{HOST}:{PORT}", "heartbeat_to_db": True,
-        "events_to_db": [name for name, _, _ in events], "environment_to_db": True,
-        "dashboard_http": True, "command_round_trip": received_commands[-1],
-        "duplicate_prevention": True, "simulated_offline_queue_sync": True,
-        "refill_verified_confirmed": True, "refill_mismatch_blocked": True,
-        "device": "synthetic MQTT client (not ESP32/Wokwi)",
-    }
-    print(json.dumps(report, indent=2))
-    device.disconnect(); device.loop_stop(); gateway.disconnect(); gateway.loop_stop()
+        try:
+            gateway = start_mqtt(path, host, port)
+            clients.append(gateway)
+            wait_until(gateway.is_connected, "gateway connection")
+            device = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION2,
+                client_id="synthetic-" + uuid.uuid4().hex[:12],
+            )
+            clients.append(device)
+            device.on_connect = on_connect
+            device.on_message = on_message
+            device.on_subscribe = lambda *args: subscribed.set()
+            device.connect(host, port, 15)
+            device.loop_start()
+            wait_until(subscribed.is_set, "device subscription")
+            api = create_app({"DB_PATH": path, "MQTT_CLIENT": gateway}).test_client()
+            publish("heartbeat", {"status": "online", "state": "IDLE", "seq": 0})
+            wait_until(
+                lambda: bool(
+                    api.get(f"/api/devices/{did}/status").get_json()["last_seen"]
+                ),
+                "heartbeat persistence",
+            )
+            messages = [
+                event("REMINDER_STARTED", 1, "08:00"),
+                event("WRONG_SLOT", 2, "08:01", slot=2),
+                event("MISSED", 3, "08:15", delay=15),
+                event("TAKEN_LATE", 4, "10:00", delay=120),
+                event("REMINDER_STARTED", 5, "14:00", "TEST_S2"),
+                event("TAKEN_ON_TIME", 6, "14:01", "TEST_S2", delay=1),
+                event("STORAGE_WARNING", 7, "14:02", "ENV", slot=0),
+                event("SENSOR_ERROR", 8, "14:03", "ENV", slot=0),
+                event("STORAGE_NORMAL", 9, "14:04", "ENV", slot=0),
+            ]
+            for message in messages:
+                publish("event", message)
+            publish("event", messages[3])
+            wait_until(
+                lambda: (
+                    scalar(
+                        "SELECT count(*) FROM medication_events WHERE device_id=?",
+                        (did,),
+                    )
+                    == 9
+                ),
+                "events and duplicate",
+            )
+            occurrences = api.get(f"/api/devices/{did}/occurrences").get_json()
+            assert len(occurrences) == 2
+            s1 = next(o for o in occurrences if o["schedule_id"] == "TEST_S1")
+            assert s1["current_outcome"] == "LATE" and s1["delay_minutes"] == 120
+            assert (
+                next(o for o in occurrences if o["schedule_id"] == "TEST_S2")[
+                    "current_outcome"
+                ]
+                == "ON_TIME"
+            )
+            publish(
+                "environment",
+                {
+                    "temperature_c": 31.5,
+                    "humidity_percent": 72,
+                    "sensor_ok": True,
+                    "seq": 20,
+                },
+            )
+            publish(
+                "environment",
+                {
+                    "temperature_c": None,
+                    "humidity_percent": None,
+                    "sensor_ok": False,
+                    "seq": 21,
+                },
+            )
+            wait_until(
+                lambda: (
+                    scalar(
+                        "SELECT count(*) FROM environment_readings WHERE device_id=?",
+                        (did,),
+                    )
+                    == 2
+                ),
+                "environment",
+            )
+            for command in (
+                {"command": "REQUEST_STATUS"},
+                {"command": "CLEAR_ALERT"},
+                {
+                    "command": "UPDATE_SCHEDULE",
+                    "schedule_id": "TEST_S2",
+                    "hour": 14,
+                    "minute": 15,
+                    "enabled": True,
+                },
+            ):
+                response = api.post(f"/api/devices/{did}/commands", json=command)
+                assert response.status_code == 202
+                cid = response.get_json()["command_id"]
+                wait_until(
+                    lambda cid=cid: (
+                        scalar(
+                            "SELECT count(*) FROM command_requests WHERE command_id=? AND status='APPLIED'",
+                            (cid,),
+                        )
+                        == 1
+                    ),
+                    "command ACK " + command["command"],
+                )
+            assert (
+                scalar("SELECT minute FROM schedules WHERE schedule_id='TEST_S2'") == 15
+            )
+            device.disconnect()
+            device.loop_stop()
+            queued = event("UNSCHEDULED_OPEN", 30, "15:00", "NONE", slot=0)
+            device.connect(host, port, 15)
+            device.loop_start()
+            wait_until(device.is_connected, "synthetic reconnect")
+            publish("event", queued)
+            wait_until(
+                lambda: (
+                    scalar(
+                        "SELECT count(*) FROM medication_events WHERE device_id=? AND seq=30",
+                        (did,),
+                    )
+                    == 1
+                ),
+                "synthetic queued event",
+            )
+            refill = {
+                "actor_id": "NURSE01",
+                "box_id": "PB01",
+                "patient_id": "P001",
+                "slot_id": 1,
+                "medication_code": "MED001",
+            }
+            verified = api.post("/api/refill/verify", json=refill).get_json()
+            assert verified["result"] == "VERIFIED"
+            confirmation = {
+                "actor_id": "NURSE01",
+                "verification_id": verified["verification_id"],
+            }
+            assert (
+                api.post("/api/refill/confirm", json=confirmation).get_json()["result"]
+                == "CONFIRMED"
+            )
+            assert (
+                api.post("/api/refill/confirm", json=confirmation).get_json()["result"]
+                == "VERIFICATION_REPLAY"
+            )
+            refill["medication_code"] = "MED002"
+            assert (
+                api.post("/api/refill/verify", json=refill).get_json()["result"]
+                == "MEDICATION_MISMATCH"
+            )
+            assert api.get("/").status_code == 200
+            print(
+                json.dumps(
+                    {
+                        "result": "PASS",
+                        "broker": f"{host}:{port}",
+                        "device": did,
+                        "source": "synthetic MQTT; NOT ESP32/Wokwi",
+                        "events": 10,
+                        "occurrences": 2,
+                        "late_reconciliation": True,
+                        "next_schedule_independent": True,
+                        "duplicate_prevention": True,
+                        "command_ack": [
+                            "REQUEST_STATUS",
+                            "CLEAR_ALERT",
+                            "UPDATE_SCHEDULE",
+                        ],
+                        "environment_sensor_error": True,
+                        "refill_confirm_mismatch_replay": True,
+                        "synthetic_reconnect": True,
+                        "firmware_queue_runtime": "NOT_RUN",
+                        "dashboard": "HTTP/API only; browser NOT_RUN",
+                    },
+                    indent=2,
+                )
+            )
+        finally:
+            for client in reversed(clients):
+                if client:
+                    client.disconnect()
+                    client.loop_stop()
 
 
 if __name__ == "__main__":

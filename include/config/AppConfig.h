@@ -26,4 +26,6 @@ constexpr uint32_t DHT_READ_MS = 10000;
 constexpr uint8_t OFFLINE_QUEUE_CAPACITY = 16;
 constexpr float DEMO_MAX_TEMPERATURE_C = 30.0f;
 constexpr float DEMO_MAX_HUMIDITY_PERCENT = 70.0f;
+constexpr float ENVIRONMENT_HYSTERESIS = 2.0f;
+constexpr uint8_t ENVIRONMENT_CONFIRM_SAMPLES = 3;
 }
