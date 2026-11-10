@@ -38,6 +38,7 @@ void MqttClient::begin() {
     snprintf(bootId_, sizeof(bootId_), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
     mqtt.setBufferSize(1024);
     mqtt.setSocketTimeout(1);
+    mqtt.setKeepAlive(AppConfig::MQTT_KEEPALIVE_SECONDS);
     mqtt.setServer(AppConfig::MQTT_HOST, AppConfig::MQTT_PORT);
     mqtt.setCallback(mqttCallback);
     currentClient = this;
@@ -72,7 +73,10 @@ void MqttClient::networkUpdate() {
         networkConnected_=connected;
         if (connected) {
             mqtt.subscribe("pillbox/PB01/command");
-            mqtt.publish("pillbox/PB01/status", "{\"device_id\":\"PB01\",\"status\":\"online\"}");
+            JsonDocument hello; hello["device_id"]=AppConfig::DEVICE_ID; hello["status"]="online";
+            hello["boot_id"]=bootId_; hello["uptime_ms"]=millis();
+            char payload[220]; serializeJson(hello,payload,sizeof(payload));
+            mqtt.publish("pillbox/PB01/status",payload,true);
             flushQueue();
         }
         return;
@@ -90,13 +94,13 @@ void MqttClient::dispatchCommand(const char* payload) {
     xSemaphoreTake(mutex_,portMAX_DELAY); commands_.push(command); xSemaphoreGive(mutex_);
 }
 
-void MqttClient::publishOrQueue(const char* topic, const char* payload, bool durable) {
+void MqttClient::publishOrQueue(const char* topic, const char* payload, bool durable, bool priority) {
     if (!mutex_ || (!durable && !connected())) return;
     Pending pending{};
     strncpy(pending.topic, topic, sizeof(pending.topic)-1);
     strncpy(pending.payload, payload, sizeof(pending.payload)-1);
     xSemaphoreTake(mutex_,portMAX_DELAY);
-    if (durable) queue_.push(pending); else telemetry_.push(pending);
+    if (priority) control_.push(pending); else if (durable) queue_.push(pending); else telemetry_.push(pending);
     xSemaphoreGive(mutex_);
 }
 
@@ -104,7 +108,8 @@ void MqttClient::flushQueue() {
     if (!mqtt.connected()) return;
     xSemaphoreTake(mutex_,portMAX_DELAY);
     if (!hasInFlight_) {
-        if (queue_.size()) { inFlight_=queue_.front(); queue_.pop(); hasInFlight_=true; }
+        if (control_.size()) { inFlight_=control_.front(); control_.pop(); hasInFlight_=true; }
+        else if (queue_.size()) { inFlight_=queue_.front(); queue_.pop(); hasInFlight_=true; }
         else if (telemetry_.size()) { inFlight_=telemetry_.front(); telemetry_.pop(); hasInFlight_=true; }
     }
     xSemaphoreGive(mutex_);
@@ -112,7 +117,7 @@ void MqttClient::flushQueue() {
     if (hasInFlight_ && mqtt.publish(inFlight_.topic,inFlight_.payload)) hasInFlight_=false;
 }
 
-void MqttClient::publishEvent(const SchedulerEvent& event, uint32_t sequence) {
+void MqttClient::publishEvent(const SchedulerEvent& event, uint32_t sequence, const char* state) {
     JsonDocument doc;
     doc["device_id"] = AppConfig::DEVICE_ID;
     doc["event"] = eventTypeName(event.type);
@@ -124,6 +129,8 @@ void MqttClient::publishEvent(const SchedulerEvent& event, uint32_t sequence) {
     doc["seq"] = sequence;
     doc["schema_version"] = 2;
     doc["boot_id"] = bootId_;
+    doc["uptime_ms"] = millis();
+    if (state) { doc["device_state"]=state; doc["device_local_minute"]=event.occurredMinute; doc["device_epoch_local"]=event.occurredEpoch; }
     char eventId[80]; snprintf(eventId, sizeof(eventId), "%s:%s:%lu", AppConfig::DEVICE_ID, bootId_, (unsigned long)sequence);
     doc["event_id"] = eventId;
     char occurrenceId[80]; snprintf(occurrenceId, sizeof(occurrenceId), "%s:%s:%lu", AppConfig::DEVICE_ID, event.scheduleId, (unsigned long)event.occurrenceDay);
@@ -142,7 +149,7 @@ void MqttClient::publishEvent(const SchedulerEvent& event, uint32_t sequence) {
     publishOrQueue("pillbox/PB01/event", payload, true);
 }
 
-void MqttClient::publishEnvironment(float temperatureC, float humidityPercent, bool sensorOk, uint32_t sampledEpoch, uint32_t sequence) {
+void MqttClient::publishEnvironment(float temperatureC, float humidityPercent, bool sensorOk, uint32_t sampledEpoch, uint32_t sequence, const char* storageStatus) {
     JsonDocument doc;
     doc["device_id"] = AppConfig::DEVICE_ID;
     doc["temperature_c"] = temperatureC;
@@ -150,34 +157,39 @@ void MqttClient::publishEnvironment(float temperatureC, float humidityPercent, b
     doc["sensor_ok"] = sensorOk;
     doc["seq"] = sequence;
     doc["sampled_epoch_local"] = sampledEpoch;
-    char payload[240]; serializeJson(doc, payload, sizeof(payload));
+    doc["boot_id"]=bootId_; doc["uptime_ms"]=millis(); doc["storage_status"]=storageStatus;
+    char payload[384]; serializeJson(doc, payload, sizeof(payload));
     publishOrQueue("pillbox/PB01/environment", payload);
 }
 
-void MqttClient::publishHeartbeat(const char* state, uint32_t sequence) {
+void MqttClient::publishHeartbeat(const char* state, uint32_t sequence, uint16_t minute, uint32_t epoch) {
     JsonDocument doc;
     doc["device_id"] = AppConfig::DEVICE_ID; doc["status"] = wifi_.connected() ? "online" : "offline";
     doc["state"] = state; doc["seq"] = sequence;
     doc["boot_id"] = bootId_;
+    doc["uptime_ms"]=millis();
+    if (minute<1440) { doc["device_local_minute"]=minute; doc["device_epoch_local"]=epoch; }
     if (mutex_) {
         xSemaphoreTake(mutex_,portMAX_DELAY);
         doc["queue_depth"] = queue_.size(); doc["queue_dropped"] = queue_.dropped();
         xSemaphoreGive(mutex_);
     }
-    char payload[220]; serializeJson(doc, payload, sizeof(payload));
-    publishOrQueue("pillbox/PB01/heartbeat", payload);
+    char payload[384]; serializeJson(doc, payload, sizeof(payload));
+    publishOrQueue("pillbox/PB01/heartbeat", payload,false,true);
 }
 
 void MqttClient::publishStatus(const char* state, uint32_t sequence) {
     JsonDocument doc; doc["device_id"] = AppConfig::DEVICE_ID; doc["state"] = state; doc["seq"] = sequence;
+    doc["boot_id"]=bootId_; doc["uptime_ms"]=millis();
     char payload[180]; serializeJson(doc, payload, sizeof(payload));
-    publishOrQueue("pillbox/PB01/status", payload);
+    publishOrQueue("pillbox/PB01/status", payload,false,true);
 }
 
 void MqttClient::publishCommandResult(const char* commandId, const char* command, bool accepted, const Schedule* schedules, uint8_t count) {
     JsonDocument doc;
     doc["device_id"] = AppConfig::DEVICE_ID; doc["command_id"] = commandId;
     doc["command"] = command; doc["command_result"] = accepted ? "APPLIED" : "REJECTED";
+    doc["boot_id"]=bootId_; doc["uptime_ms"]=millis();
     if (accepted && strcmp(command, "UPDATE_SCHEDULE") == 0) {
         auto values = doc["schedules"].to<JsonArray>();
         for (uint8_t i=0; i<count; ++i) {
@@ -187,5 +199,5 @@ void MqttClient::publishCommandResult(const char* commandId, const char* command
         }
     }
     char payload[768]; serializeJson(doc,payload,sizeof(payload));
-    publishOrQueue("pillbox/PB01/status",payload);
+    publishOrQueue("pillbox/PB01/status",payload,false,true);
 }

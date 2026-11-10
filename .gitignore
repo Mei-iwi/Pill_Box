@@ -9,6 +9,8 @@ include/config/Secrets.h
 gateway/.env
 gateway/auth.local.json
 gateway/data/*.db
+gateway/data/*.db-wal
+gateway/data/*.db-shm
 gateway/data/backups/
 __pycache__/
 *.pyc

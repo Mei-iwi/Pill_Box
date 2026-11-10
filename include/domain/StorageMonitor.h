@@ -9,6 +9,7 @@ public:
                              float maxTemperature, float maxHumidity, float hysteresis, uint8_t required) {
         if (!sensorOk || !isfinite(temperature) || !isfinite(humidity)) {
             bad_=good_=0;
+            confirmed_=false;
             if (!error_) { error_=true; return StorageTransition::SENSOR_ERROR; }
             return StorageTransition::NONE;
         }
@@ -17,11 +18,12 @@ public:
         const bool recovered=temperature<maxTemperature-hysteresis && humidity<maxHumidity-hysteresis;
         bad_=outside ? (bad_<250 ? bad_+1 : 250) : 0;
         good_=recovered ? (good_<250 ? good_+1 : 250) : 0;
-        if (!warning_ && bad_>=required) { warning_=true; return StorageTransition::WARNING; }
-        if (warning_ && good_>=required) { warning_=false; return StorageTransition::NORMAL; }
+        if ((!warning_ || !confirmed_) && bad_>=required) { warning_=true; confirmed_=true; return StorageTransition::WARNING; }
+        if ((warning_ || !confirmed_) && good_>=required) { warning_=false; confirmed_=true; return StorageTransition::NORMAL; }
         return StorageTransition::NONE;
     }
+    const char* status() const { return error_ ? "SENSOR_ERROR" : !confirmed_ ? "PENDING" : warning_ ? "WARNING" : "NORMAL"; }
 private:
-    bool warning_=false,error_=false;
+    bool warning_=false,error_=false,confirmed_=false;
     uint8_t bad_=0,good_=0;
 };

@@ -35,12 +35,28 @@ def list_result(db, table, where, args, order, default_limit=50, columns="*"):
             )
         )
     try:
-        page = int(request.args.get("page", "1"))
-        size = int(request.args.get("page_size", "8"))
-        if page < 1 or not 1 <= size <= 50:
-            raise ValueError
-    except ValueError:
+        return jsonify(
+            page_data(
+                db,
+                table,
+                where,
+                args,
+                order,
+                request.args.get("page", "1"),
+                request.args.get("page_size", "8"),
+                columns,
+            )
+        )
+    except (TypeError, ValueError):
         return jsonify(error="invalid pagination"), 400
+
+
+def page_data(db, table, where, args, order, page=1, size=8, columns="*"):
+    page = int(page)
+    size = int(size)
+    if page < 1 or not 1 <= size <= 50:
+        raise ValueError("invalid pagination")
+    clause = (" WHERE " + where) if where else ""
     total = db.execute(f"SELECT count(*) FROM {table}{clause}", args).fetchone()[0]
     pages = max(1, (total + size - 1) // size)
     page = min(page, pages)
@@ -49,7 +65,47 @@ def list_result(db, table, where, args, order, default_limit=50, columns="*"):
         f"SELECT {columns} FROM {table}{clause} ORDER BY {order} LIMIT ? OFFSET ?",
         (*args, size, (page - 1) * size),
     )
-    return jsonify(items=items, total=total, page=page, page_size=size, pages=pages)
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": size,
+        "pages": pages,
+    }
+
+
+def device_rows(db):
+    return [
+        availability(d)
+        for d in scoped(
+            rows(
+                db,
+                "SELECT d.*,p.display_name patient_name FROM devices d LEFT JOIN patients p ON p.patient_id=d.patient_id ORDER BY d.device_id",
+            ),
+            "device_id",
+        )
+    ]
+
+
+def environment_rows(db, device_id, boot):
+    # Prefer current-boot readings and monotonic seq, even when old queued samples arrive late.
+    if (
+        boot
+        and db.execute(
+            "SELECT 1 FROM environment_readings WHERE device_id=? AND boot_id=? LIMIT 1",
+            (device_id, boot),
+        ).fetchone()
+    ):
+        return rows(
+            db,
+            "SELECT * FROM environment_readings WHERE device_id=? AND boot_id=? ORDER BY seq DESC,id DESC LIMIT 20",
+            (device_id, boot),
+        )
+    return rows(
+        db,
+        "SELECT * FROM environment_readings WHERE device_id=? ORDER BY id DESC LIMIT 20",
+        (device_id,),
+    )
 
 
 def create_app(test_config=None):
@@ -82,13 +138,115 @@ def create_app(test_config=None):
 
     @app.get("/api/devices")
     def devices():
-        db = connect(app.config["DB_PATH"])
-        result = rows(
-            db,
-            "SELECT d.*,p.display_name patient_name,(SELECT event FROM medication_events e WHERE e.device_id=d.device_id AND e.event IN ('STORAGE_WARNING','STORAGE_NORMAL') ORDER BY e.id DESC LIMIT 1) storage_status FROM devices d LEFT JOIN patients p ON p.patient_id=d.patient_id ORDER BY d.device_id",
-        )
-        db.close()
-        return jsonify([availability(d) for d in scoped(result, "device_id")])
+        with connect(app.config["DB_PATH"]) as db:
+            return jsonify(device_rows(db))
+
+    @app.get("/api/devices/<device_id>/live")
+    def live(device_id):
+        try:
+            with connect(app.config["DB_PATH"]) as db:
+                db.execute("BEGIN")
+                devices = device_rows(db)
+                device = next((d for d in devices if d["device_id"] == device_id), None)
+                if device is None:
+                    return jsonify(error="device not found"), 404
+                pages = {
+                    name: request.args.get(name + "_page", "1")
+                    for name in ("events", "occurrences", "audit", "commands")
+                }
+                size = request.args.get("page_size", "8")
+                events = page_data(
+                    db,
+                    "medication_events",
+                    "device_id=?",
+                    (device_id,),
+                    "id DESC",
+                    pages["events"],
+                    size,
+                )
+                occurrences = page_data(
+                    db,
+                    "schedule_occurrences",
+                    "device_id=?",
+                    (device_id,),
+                    "scheduled_at DESC,occurrence_id DESC",
+                    pages["occurrences"],
+                    size,
+                )
+                commands = page_data(
+                    db,
+                    "command_requests",
+                    "device_id=?",
+                    (device_id,),
+                    "created_at DESC,command_id DESC",
+                    pages["commands"],
+                    size,
+                    "command_id,command,status,created_at,ack_at",
+                )
+                caregiver = g.identity is None or g.identity["role"] in (
+                    "nurse",
+                    "admin",
+                )
+                audit = (
+                    page_data(
+                        db,
+                        "refill_audit_logs",
+                        "box_id=?",
+                        (device_id,),
+                        "id DESC",
+                        pages["audit"],
+                        size,
+                    )
+                    if caregiver
+                    else {
+                        "items": [],
+                        "total": 0,
+                        "page": 1,
+                        "pages": 1,
+                        "page_size": int(size),
+                    }
+                )
+                schedules = rows(
+                    db,
+                    "SELECT s.*,m.label medication_name FROM schedules s LEFT JOIN medication_catalog m ON m.medication_code=s.medication_code WHERE s.device_id=? ORDER BY s.hour,s.minute,s.schedule_id",
+                    (device_id,),
+                )
+                slots = rows(
+                    db,
+                    "SELECT a.*,m.label medication_name FROM slot_assignments a LEFT JOIN medication_catalog m ON m.medication_code=a.medication_code WHERE a.device_id=? ORDER BY a.slot_id",
+                    (device_id,),
+                )
+                recent = (
+                    events["items"][:4]
+                    if events["page"] == 1
+                    else rows(
+                        db,
+                        "SELECT * FROM medication_events WHERE device_id=? ORDER BY id DESC LIMIT 4",
+                        (device_id,),
+                    )
+                )
+                result = {
+                    "devices": devices,
+                    "device": device,
+                    "events": events,
+                    "occurrences": occurrences,
+                    "commands": commands,
+                    "audit": audit,
+                    "schedules": schedules,
+                    "slots": slots,
+                    "recent": recent,
+                    "readings": environment_rows(db, device_id, device["boot_id"]),
+                    "session": {
+                        "identity": g.identity,
+                        "auth_enabled": app.config["AUTH_IDENTITIES"] is not None,
+                    },
+                    "server_received_at": utc_now(),
+                }
+            response = jsonify(result)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        except (TypeError, ValueError):
+            return jsonify(error="invalid pagination"), 400
 
     @app.get("/api/devices/<device_id>/status")
     def status(device_id):
@@ -110,14 +268,13 @@ def create_app(test_config=None):
 
     @app.get("/api/devices/<device_id>/environment")
     def environment(device_id):
-        db = connect(app.config["DB_PATH"])
-        result = rows(
-            db,
-            "SELECT * FROM environment_readings WHERE device_id=? ORDER BY id DESC LIMIT 20",
-            (device_id,),
-        )
-        db.close()
-        return jsonify(result)
+        with connect(app.config["DB_PATH"]) as db:
+            device = db.execute(
+                "SELECT boot_id FROM devices WHERE device_id=?", (device_id,)
+            ).fetchone()
+            return jsonify(
+                environment_rows(db, device_id, device["boot_id"] if device else None)
+            )
 
     @app.get("/api/devices/<device_id>/schedules")
     def schedules(device_id):

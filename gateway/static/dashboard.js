@@ -29,6 +29,13 @@ const views = ['overview', 'schedules', 'history', 'refill', 'devices'];
 let token = '', verification = null, verificationContext = '', expiresAt = 0;
 let loading = false, refreshQueued = false, caregiver = true, authPrompted = false;
 let currentView = 'overview', knownDevices = [], currentSlots = [], lastCommandId = null;
+let bootstrapReady = false, accessBlocked = false;
+const renderCache = new Map();
+function renderChanged(name, value, render) {
+  const fingerprint = JSON.stringify(value);
+  if (renderCache.get(name) === fingerprint) return;
+  render(); renderCache.set(name, fingerprint);
+}
 const listPages = { events: 1, occurrences: 1, audit: 1, commands: 1 };
 const pageSize = 8;
 
@@ -75,24 +82,31 @@ function showView(view, updateHash = true) {
   if (updateHash && location.hash !== '#' + view) history.replaceState(null, '', '#' + view);
 }
 async function api(url, body) {
-  const response = await fetch(url, {
-    method: body ? 'POST' : 'GET',
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
-    ...(body ? { body: JSON.stringify(body) } : {})
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    const error = new Error(labels[data.result] || ({
-      'authentication required': 'Vui lòng nhập khóa truy cập.',
-      'device not assigned to identity': 'Bạn chưa được phân quyền cho hộp này.',
-      'caregiver role required': 'Chức năng dành cho người chăm sóc.',
-      'MQTT broker unavailable': 'Chưa kết nối được thiết bị. Vui lòng thử lại.',
-      'valid verification required before confirm': 'Vui lòng xác minh lại trước khi nạp.'
-    }[data.error]) || data.error || 'Không thể tải dữ liệu.');
-    error.status = response.status;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, {
+      method: body ? 'POST' : 'GET', cache: 'no-store', signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {})
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      const error = new Error(labels[data.result] || ({
+        'authentication required': 'Vui lòng nhập khóa truy cập.',
+        'device not assigned to identity': 'Bạn chưa được phân quyền cho hộp này.',
+        'caregiver role required': 'Chức năng dành cho người chăm sóc.',
+        'MQTT broker unavailable': 'Chưa kết nối được thiết bị. Vui lòng thử lại.',
+        'valid verification required before confirm': 'Vui lòng xác minh lại trước khi nạp.'
+      }[data.error]) || data.error || 'Không thể tải dữ liệu.');
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Quá thời gian chờ. Kiểm tra trạng thái trước khi gửi lại.');
     throw error;
-  }
-  return data;
+  } finally { clearTimeout(timeout); }
 }
 function resetVerification(edited = false) {
   const hadVerification = Boolean(verification);
@@ -127,9 +141,9 @@ function renderDevices(devices, device) {
   $('#hero-state').textContent = labels[device?.state] || 'Chưa có trạng thái';
   $('#control-device').textContent = selected();
 }
-function renderSchedules(schedules, slots) {
+function renderSchedules(schedules, slots, device) {
   const civil = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date()).split(':').map(Number);
-  const minute = civil[0] * 60 + civil[1];
+  const minute = Number.isInteger(device?.device_local_minute) ? device.device_local_minute : civil[0] * 60 + civil[1];
   const next = schedules.filter(schedule => schedule.enabled).sort((a, b) =>
     ((a.hour * 60 + a.minute - minute + 1440) % 1440) - ((b.hour * 60 + b.minute - minute + 1440) % 1440)
   )[0];
@@ -172,15 +186,15 @@ function renderEvents(events, occurrences, recentEvents) {
 }
 function renderEnvironment(readings, device) {
   const latest = readings[0];
-  const warning = { event: device?.storage_status };
-  const alert = Boolean(latest && (!latest.sensor_ok || warning?.event === 'STORAGE_WARNING'));
+  const storage = device?.storage_status || 'PENDING';
+  const alert = Boolean(latest && (!latest.sensor_ok || ['WARNING', 'STORAGE_WARNING', 'SENSOR_ERROR'].includes(storage)));
+  const storageLabel = !latest ? 'Chưa có số đo' : !latest.sensor_ok || storage === 'SENSOR_ERROR' ? 'Lỗi cảm biến' : alert ? 'Vượt ngưỡng' : storage === 'PENDING' ? 'Đang đánh giá' : 'Cập nhật ' + clock(latest.sampled_at || latest.received_at);
   $('#environment-value').closest('.metric').classList.toggle('metric-alert', alert);
   $('#environment-value').innerHTML = latest?.sensor_ok
     ? esc(number(latest.temperature_c)) + '°<small>· ' + esc(number(latest.humidity_percent)) + '% RH</small>' : '—';
-  $('#environment-status').textContent = !latest ? 'Chưa có số đo' : !latest.sensor_ok ? 'Lỗi cảm biến' :
-    warning?.event === 'STORAGE_WARNING' ? 'Vượt ngưỡng' : 'Cập nhật ' + clock(latest.sampled_at || latest.received_at);
+  $('#environment-status').textContent = storageLabel;
   $('#environment').innerHTML = '<div class="section-heading"><h2>Môi trường</h2>' +
-    (latest ? badge(alert ? 'STORAGE_WARNING' : 'IDLE', !latest.sensor_ok ? 'Lỗi cảm biến' : alert ? 'Vượt ngưỡng' : 'Đã cập nhật') : '') + '</div>' +
+    (latest ? badge(alert ? 'STORAGE_WARNING' : 'IDLE', storageLabel) : '') + '</div>' +
     (latest ? '<div class="environment-detail"><strong>' + (latest.sensor_ok ? esc(number(latest.temperature_c)) + ' °C' : '—') +
       '</strong><span>' + (latest.sensor_ok ? esc(number(latest.humidity_percent)) + '% RH' : 'Lỗi cảm biến') +
       '</span></div><details><summary>Số đo gần đây</summary>' + readings.slice(0, 5).map(item => '<p>' +
@@ -222,72 +236,74 @@ function renderPagination(name, result) {
     makeButton(result.page - 1, 'Trước', result.page === 1) + buttons +
     makeButton(result.page + 1, 'Sau', result.page === result.pages);
 }
-function listUrl(url, name) {
-  return url + (url.includes('?') ? '&' : '?') + 'page=' + listPages[name] + '&page_size=' + pageSize;
-}
 
 async function load() {
   if (loading) { refreshQueued = true; return; }
   loading = true;
-  const device = selected();
+  let device = selected();
   try {
-    const session = await api('/api/session');
+    if (!bootstrapReady) {
+      const assigned = await api('/api/devices');
+      if (!assigned.length) throw new Error('Chưa có hộp thuốc được phân công.');
+      knownDevices = assigned;
+      $('#device').replaceChildren(...assigned.map(item => new Option(item.device_id, item.device_id)));
+      if (assigned.some(item => item.device_id === device)) $('#device').value = device;
+      else {
+        device = selected();
+        $('#patient').value = assigned.find(item => item.device_id === device)?.patient_id || '';
+        resetVerification();
+      }
+      bootstrapReady = true;
+    }
+    const query = new URLSearchParams({ page_size: String(pageSize) });
+    for (const [name, page] of Object.entries(listPages)) query.set(name + '_page', String(page));
+    const snapshot = await api('/api/devices/' + encodeURIComponent(device) + '/live?' + query);
+    if (device !== selected()) { refreshQueued = true; return; }
+    const { session, devices, events, readings, schedules, occurrences, slots, audit, commands, recent } = snapshot;
     $('#session').textContent = session.auth_enabled
-      ? session.identity.actor_id + ' · ' + roleLabels[session.identity.role]
-      : 'Không yêu cầu khóa truy cập.';
+      ? session.identity.actor_id + ' · ' + roleLabels[session.identity.role] : 'Không yêu cầu khóa truy cập.';
     caregiver = !session.auth_enabled || ['nurse', 'admin'].includes(session.identity.role);
     document.querySelectorAll('.caregiver-control').forEach(button => { button.hidden = !caregiver; });
     $('#refill-panel').hidden = !caregiver;
     $('#actor-field').hidden = session.auth_enabled;
     if (session.auth_enabled) $('#actor').value = session.identity.actor_id;
     if (!caregiver && currentView === 'refill') showView('overview');
-    const devices = await api('/api/devices');
     knownDevices = devices;
     const options = devices.map(item => item.device_id);
     if (JSON.stringify(options) !== JSON.stringify([...$('#device').options].map(option => option.value))) {
       $('#device').replaceChildren(...devices.map(item => new Option(item.device_id, item.device_id)));
-      if (options.includes(device)) $('#device').value = device;
+      $('#device').value = device;
     }
-    if (!options.includes(device)) {
-      resetVerification();
-      if (options.length) {
-        $('#patient').value = devices[0].patient_id || '';
-        refreshQueued = true;
-      } else throw new Error('Chưa có hộp thuốc được phân công.');
-      return;
-    }
-    const base = '/api/devices/' + encodeURIComponent(device);
-    const [events, readings, schedules, occurrences, slots, audit, commands] = await Promise.all([
-      api(listUrl(base + '/events', 'events')), api(base + '/environment'), api(base + '/schedules'), api(listUrl(base + '/occurrences', 'occurrences')),
-      api(base + '/slots'), caregiver ? api(listUrl('/api/refill/audit?device_id=' + encodeURIComponent(device), 'audit')) : {items:[],page:1,pages:1}, api(listUrl(base + '/commands', 'commands'))
-    ]);
-    if (device !== selected()) { refreshQueued = true; return; }
     currentSlots = slots;
-    renderDevices(devices, devices.find(item => item.device_id === device));
-    renderSchedules(schedules, slots);
-    const recent = events.page === 1 ? events.items : (await api(base + '/events?page=1&page_size=4')).items;
-    if (device !== selected()) { refreshQueued = true; return; }
-    renderEvents(events.items, occurrences.items, recent);
-    renderPagination('events', events);
-    renderPagination('occurrences', occurrences);
-    renderEnvironment(readings, devices.find(item => item.device_id === device));
-    renderAudit(audit.items, device);
-    renderPagination('audit', audit);
-    renderCommands(commands.items);
-    renderPagination('commands', commands);
+    const current = snapshot.device;
+    renderChanged('devices', devices, () => renderDevices(devices, current));
+    renderChanged('schedules', [schedules, slots, current.device_local_minute, Math.floor(Date.now()/60000)], () => renderSchedules(schedules, slots, current));
+    renderChanged('events', [events, occurrences, recent], () => renderEvents(events.items, occurrences.items, recent));
+    renderChanged('events-page', events, () => renderPagination('events', events));
+    renderChanged('occurrences-page', occurrences, () => renderPagination('occurrences', occurrences));
+    renderChanged('environment', [readings, current.storage_status], () => renderEnvironment(readings, current));
+    renderChanged('audit', audit, () => renderAudit(audit.items, device));
+    renderChanged('audit-page', audit, () => renderPagination('audit', audit));
+    renderChanged('commands', [commands, lastCommandId], () => renderCommands(commands.items));
+    renderChanged('commands-page', commands, () => renderPagination('commands', commands));
     renderRefillContext();
     message('#error', '');
   } catch (error) {
     message('#error', error.message);
     $('#connection').classList.remove('online');
     $('#connection').textContent = error.status === 401 ? 'Cần đăng nhập' : 'Chưa kết nối';
-    if (error.status === 401 && !authPrompted) {
-      authPrompted = true;
-      $('#settings-dialog').showModal();
+    renderCache.clear();
+    if (error.status === 403) bootstrapReady = false;
+    if (error.status === 401) {
+      accessBlocked = true; bootstrapReady = false;
+      if (!authPrompted) {
+        authPrompted = true;
+        if (!$('#settings-dialog').open) $('#settings-dialog').showModal();
+      }
     }
   } finally {
     loading = false;
-    if (refreshQueued) { refreshQueued = false; load(); }
+    if (refreshQueued && !accessBlocked) { refreshQueued = false; load(); }
   }
 }
 async function sendCommand(command) {
@@ -343,7 +359,7 @@ $('#device').addEventListener('change', () => {
   message('#command-result', '');
   lastCommandId = null;
   for (const name of Object.keys(listPages)) listPages[name] = 1;
-  currentSlots = [];
+  currentSlots = []; renderCache.clear();
   $('#patient').value = knownDevices.find(device => device.device_id === selected())?.patient_id || '';
   renderRefillContext();
   load();
@@ -355,7 +371,7 @@ $('#settings-close').addEventListener('click', () => $('#settings-dialog').close
 $('#login').addEventListener('click', () => {
   token = $('#access-token').value.trim();
   $('#access-token').value = '';
-  authPrompted = false;
+  authPrompted = false; bootstrapReady = false; accessBlocked = false; renderCache.clear();
   resetVerification();
   $('#settings-dialog').close();
   load();
@@ -371,7 +387,10 @@ setInterval(() => {
     resetVerification();
     message('#refill-result', 'Xác minh đã hết hạn. Vui lòng xác minh lại.');
   }
-  load();
-}, 4000);
+  if (document.visibilityState === 'visible' && !accessBlocked) load();
+}, 1000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && !accessBlocked) load();
+});
 showView(location.hash.slice(1) || 'overview', false);
 load();

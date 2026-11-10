@@ -260,7 +260,9 @@ License là cấu hình cá nhân, không nằm trong source. Không dán key v�
 
 Simulation dùng **Wokwi-GUEST**, mật khẩu trống và broker **test.mosquitto.org:1883**. Không cần Secrets.h để chạy cấu hình Wokwi mặc định.
 
-Heartbeat khoảng 20 giây/lần, môi trường khoảng 60 giây/lần, Dashboard tải lại dữ liệu mỗi 4 giây. Web mở được chưa có nghĩa thiết bị đã kết nối.
+Heartbeat định kỳ **5 giây/lần**; thao tác và thay đổi trạng thái được gửi ngay. DHT22 đọc/gửi số đo **2 giây/lần**. Dashboard đang mở lấy một bản dữ liệu tổng hợp **1 giây/lần**, tạm dừng khi tab bị ẩn và cập nhật ngay khi quay lại. Thời gian thực tế còn phụ thuộc mạng, broker và tốc độ mô phỏng.
+
+Sau khi cập nhật code: build lại **esp32s2_wokwi**, chọn **Wokwi: Stop Simulator → Start Simulator**, khởi động lại Gateway và **Ctrl+Shift+R** trên web. Giữ tab simulator hiển thị; tab bị ẩn có thể làm mô phỏng tạm dừng. Chỉ chạy một simulator/board mang ID **PB01** trên cùng broker để tránh ngắt kết nối lẫn nhau.
 
 ### 7.3. Kiểm tra các chức năng
 
@@ -271,7 +273,7 @@ RTC trong [diagram.json](diagram.json) bắt đầu **07:59:50 ngày 10/11/2026*
 | Chờ tới 08:00 | LED1/buzzer nhắc, có sự kiện bắt đầu nhắc |
 | Bấm ngăn 2 khi đang nhắc ngăn 1 | Mở sai ngăn; ngăn 1 vẫn nhắc |
 | Bấm đúng ngăn 1 trong cửa sổ đúng giờ | Xác nhận lấy đúng giờ |
-| Thay giá trị DHT22 | Số đo lên Dashboard sau chu kỳ publish tiếp theo |
+| Thay giá trị DHT22 | Số đo mới sau lần đọc/gửi tiếp theo, khoảng 2 giây mô phỏng cộng mạng và chu kỳ web |
 | Thiết bị → Cập nhật trạng thái | Chờ phản hồi rồi đã áp dụng khi nhận ACK |
 | Thiết bị → Tắt âm & đèn nhắc | Tắt cảnh báo hiện tại; không hoàn tất lịch |
 
@@ -290,7 +292,22 @@ TIME 10:00
 
 TIME chỉ có trong simulation. Nếu thử lại occurrence đã hoàn tất cùng ngày, dùng phiên mô phỏng sạch hoặc đổi ngày initTime trong diagram.json sang ngày mới. Ledger ngăn ghi nhận lặp; không xóa DB/NVS tùy tiện.
 
-DHT mặc định trong sơ đồ 31,5 °C / 72% RH. Ngưỡng phần mềm 30 °C / 70% cần 3 mẫu gửi liên tiếp; hồi phục cần cả hai dưới 28 °C / 68% đủ3 mẫu. Đây là ngưỡng minh họa, không phải tiêu chuẩn bảo quản chung.
+Trong VS Code, mở **View → Terminal**, chọn terminal **Wokwi Terminal**, bấm vào vùng nội dung rồi gõ lệnh TIME và nhấn **Enter**. Firmware mô phỏng hiển thị lại ký tự nhập, hỗ trợ Backspace và nhận cả CR/LF/CRLF. Thành công sẽ có dòng **DEMO clock updated**. Nếu không thấy ký tự hoặc phản hồi, kiểm tra simulator đang chạy, chọn đúng Wokwi Terminal và build rồi Stop/Start simulator để nạp firmware mới.
+
+Sơ đồ nối UART0 hai chiều: **esp:TX (GPIO43) → $serialMonitor:RX** và **esp:RX (GPIO44) ← $serialMonitor:TX**. Giữ hai kết nối này khi chỉnh mạch. Nếu Wokwi Terminal trống hoàn toàn, dừng/chạy lại simulator để nạp lại cả **diagram.json**; phải thấy dòng **Wokwi: type TIME…** trước khi thử lệnh. Không nhập TIME vào terminal Bash/PowerShell.
+
+DHT mặc định trong sơ đồ 31,5 °C / 72% RH. Ngưỡng phần mềm 30 °C / 70% cần **3 lần đọc mới liên tiếp**, cách nhau 2 giây; hồi phục cần cả hai dưới 28 °C / 68% đủ 3 lần đọc. Cảnh báo/hồi phục thường cần khoảng **4–6 giây mô phỏng**, cộng thời gian truyền và cập nhật web. Khi vừa khởi động, môi trường hiện **Đang đánh giá** cho đến khi đủ mẫu; cảnh báo của phiên cũ không được dùng làm trạng thái phiên mới. Đây là ngưỡng minh họa, không phải tiêu chuẩn bảo quản chung.
+
+### 7.4. Kiểm thử độ phản hồi trên giao diện và simulator
+
+1. Chạy Gateway theo mục 5, mở **http://127.0.0.1:5000**, chọn **PB01**. Mở simulator cạnh trình duyệt để cả hai cùng hiển thị.
+2. Nếu S1 ngày 10/11/2026 đã hoàn tất, dừng simulator và đổi ngày **initTime** của RTC trong **diagram.json** sang ngày chưa kiểm thử, giữ giờ **07:59:50**, rồi chạy lại. Lịch sử cũ vẫn được giữ.
+3. Gửi **TIME 08:00** kèm Enter ở Serial Monitor. Quan sát LED1/buzzer, **Tổng quan** chuyển sang nhắc và **Lịch sử** có sự kiện mới. Bấm ngăn 2: có mở sai ngăn, ngăn 1 vẫn nhắc. Bấm ngăn 1: kết quả đúng giờ được cập nhật; không phải chờ heartbeat định kỳ.
+4. Chọn DHT22 trong simulator, đổi về **25 °C / 50%**. Số đo trên **Tổng quan/Lịch sử** cập nhật theo chu kỳ 2 giây; sau 3 mẫu mới, trạng thái bảo quản trở về bình thường. Đổi sang **32 °C / 75%**, chờ đủ 3 mẫu để thấy cảnh báo.
+5. Vào **Thiết bị → Cập nhật trạng thái**. Danh sách lệnh chuyển **Chờ phản hồi → Đã áp dụng** khi Gateway nhận ACK. Lệnh được ưu tiên trước các sự kiện đang chờ gửi. Với **Tắt âm & đèn nhắc**, quan sát LED/buzzer dừng; lịch vẫn chờ lấy thuốc.
+6. Có thể mở **F12 → Network**, lọc **/live**: khi tab web hiển thị sẽ có khoảng một request mỗi giây. API **/api/devices/PB01/live** trả trạng thái, số đo và các danh sách trong cùng một snapshot; trường **device_local_minute** là giờ thiết bị báo, **last_seen** là thời điểm Gateway nhận dữ liệu.
+
+Nếu phản hồi vẫn chậm, kiểm tra simulator có đang chạy và hiển thị, Gateway/firmware dùng cùng broker, không có PB01 thứ hai và Network không có request lỗi. MQTT keepalive được đặt 60 giây để chịu dao động tốc độ mô phỏng; đây là hạn kiểm tra kết nối, không phải chu kỳ gửi dữ liệu. Nguồn tham khảo: [hiệu năng Wokwi](https://docs.wokwi.com/faq), [tab simulator](https://docs.wokwi.com/vscode/project-config), [thời gian mô phỏng ESP32](https://docs.wokwi.com/guides/esp32-wifi).
 
 ## 8. Sử dụng Dashboard và dữ liệu khởi tạo
 
@@ -312,7 +329,7 @@ Chọn hộp tại submenu. Các danh sách dài có phân trang; header/submenu
 
 Đây là cấu hình khởi tạo, không phải hồ sơ người bệnh/chỉ định dùng thuốc. Không tạo sẵn lịch sử lấy hoặc số đo giả. **Firmware/mạch hiện tại là PB01; PB02 chỉ có cấu hình phía Gateway**, không tự phát bản tin.
 
-Lịch tiếp theo trên web tính theo thời gian hiện tại tại Việt Nam; khi dùng TIME để nhảy giờ mô phỏng, đối chiếu event/occurrence của thiết bị để kiểm thử.
+Lịch tiếp theo trên web dùng phút hiện tại do thiết bị báo, nên theo được lệnh **TIME** khi mô phỏng. Nếu thiết bị chưa báo giờ, web dùng giờ Việt Nam của máy đang mở trình duyệt.
 
 ### Nạp thuốc hai bước
 
@@ -521,7 +538,7 @@ unset PILLBOX_AUTH_FILE
 ./.venv/Scripts/python.exe -m unittest discover -s gateway/tests -t . -v
 ~~~
 
-Linux/macOS dùng **./.venv/bin/python**. Hiện có 33 test, sử dụng DB tạm.
+Linux/macOS dùng **./.venv/bin/python**. Hiện có 41 test, sử dụng DB tạm, bao gồm snapshot realtime, dữ liệu đến trễ, trạng thái phiên khởi động mới và phân quyền.
 
 ### MQTT hai chiều qua broker thật
 
@@ -580,7 +597,7 @@ Start-Process -FilePath "C:\Program Files (x86)\Microsoft\Edge\Application\msedg
 node test/ui_dashboard.mjs
 ~~~
 
-Sửa đường dẫn Edge nếu cài ở nơi khác. Script kiểm menu cố định, ảnh/favicon, đổi hộp, phân trang và trạng thái form. POST refill/GET phân trang thử được mock riêng, không tạo audit giả vào DB đang chạy. Ảnh kết quả tại **.pio/ui-desktop.png** và **.pio/ui-mobile.png**.
+Sửa đường dẫn Edge nếu cài ở nơi khác. Script kiểm menu cố định, ảnh/favicon, đổi hộp, phân trang và trạng thái form. POST refill/GET phân trang thử được mock riêng, không tạo audit giả vào DB đang chạy. Phép đo **BROWSER_UPDATE_MS** thay trạng thái trong phản hồi snapshot riêng của browser để kiểm tra chu kỳ web dưới 2 giây; không phải độ trễ từ GPIO qua MQTT. Ảnh kết quả tại **.pio/ui-desktop.png** và **.pio/ui-mobile.png**.
 
 Đóng riêng browser kiểm thử ở CDP9334 bằng lệnh sau; không dùng với profile trình duyệt cá nhân:
 
@@ -604,7 +621,7 @@ Các kiểm tra đã thực thi trên máy phát triển: hai build PASS, Gatewa
 | Web mở nhưng PB01 offline | Kiểm tra thiết bị, mạng, MQTT_AUTOSTART và cùng broker; chờ heartbeat |
 | PB01 chập chờn khi nhiều người chạy | Firmware dùng cùng client ID/topic PB01 trên public broker; dừng bản trùng hoặc dùng broker riêng đã cấu hình đồng bộ |
 | Sửa Secrets.h nhưng broker simulation không đổi | Simulation lấy host ở nhánh PILLBOX_SIMULATION của AppConfig.h; nếu đổi phải sửa đúng nhánh và build lại |
-| Chưa có DHT | Chờ chu kỳ publish khoảng 60s; kiểm tra DHT và topic environment |
+| Chưa có DHT | Chờ chu kỳ đọc/gửi khoảng 2 giây mô phỏng; kiểm tra DHT, topic environment và đã Stop/Start sau khi build |
 | Giao diện cũ sau pull | Ctrl+Shift+R; nếu thay HTML, dừng/chạy lại Gateway |
 | API 401/403 | Kiểm tra khóa trong Tài khoản, role và devices trong auth.local.json |
 | Verify mismatch | Đối chiếu hộp/hồ sơ/ngăn/mã bao bì; không sửa mã dự kiến để ép confirm |

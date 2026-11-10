@@ -17,4 +17,7 @@ public:
     bool isReady() const { return ready_; }
 private:
     bool ready_ = false;
+    mutable bool cached_ = false;
+    mutable unsigned long lastRead_ = 0;
+    mutable ClockTime cachedTime_{};
 };

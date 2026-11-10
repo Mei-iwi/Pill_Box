@@ -56,7 +56,7 @@ def main():
 
         def event(name, seq, at, sid="TEST_S1", slot=1, delay=0):
             scheduled = "14:00" if sid == "TEST_S2" else "08:00"
-            return {
+            payload = {
                 "schema_version": 2,
                 "event_id": f"{did}:{boot}:{seq}",
                 "boot_id": boot,
@@ -70,6 +70,15 @@ def main():
                 "device_time_quality": "synthetic",
                 "delay_minutes": delay,
             }
+            if name.startswith("TAKEN"):
+                payload["device_state"] = "IDLE"
+            elif name == "MISSED":
+                payload["device_state"] = "ALERT"
+            elif name in ("REMINDER_STARTED", "WRONG_SLOT"):
+                payload["device_state"] = "REMINDING"
+            hour, minute = map(int, at.split(":"))
+            payload["device_local_minute"] = hour * 60 + minute
+            return payload
 
         def on_connect(client, userdata, flags, reason, properties):
             client.subscribe(f"pillbox/{did}/command", qos=1)
@@ -136,6 +145,10 @@ def main():
                 "events and duplicate",
             )
             occurrences = api.get(f"/api/devices/{did}/occurrences").get_json()
+            live = api.get(f"/api/devices/{did}/live").get_json()
+            assert live["device"]["state"] == "IDLE"
+            assert live["device"]["device_local_minute"] == 844
+            assert live["device"]["storage_status"] == "NORMAL"
             assert len(occurrences) == 2
             s1 = next(o for o in occurrences if o["schedule_id"] == "TEST_S1")
             assert s1["current_outcome"] == "LATE" and s1["delay_minutes"] == 120

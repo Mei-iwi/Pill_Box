@@ -83,6 +83,34 @@ try {
   await until("document.querySelector('.hero-art img').complete && document.querySelector('.hero-art img').naturalWidth>0");
   assert.equal(await evaluate("fetch(document.querySelector('link[rel=icon]').href).then(r=>r.status)"),200);
   await screenshot('.pio/ui-desktop.png');
+  // Measure browser polling independently of firmware/network latency.
+  await evaluate(`
+    window.beforeLatencyFetch=window.fetch;
+    window.livePollTimes=[];
+    window.injectLiveState=false;
+    window.liveTarget=document.querySelector('#hero-state').textContent==='Đang cảnh báo'?'IDLE':'ALERT';
+    window.liveExpected=window.liveTarget==='ALERT'?'Đang cảnh báo':'Đang chờ';
+    window.fetch=async(url,options={})=>{
+      if(String(url).includes('/live?')){
+        window.livePollTimes.push(performance.now());
+        const response=await window.beforeLatencyFetch(url,options);
+        const snapshot=await response.json();
+        if(window.injectLiveState){
+          snapshot.device.state=window.liveTarget;
+          snapshot.devices=snapshot.devices.map(device=>device.device_id===snapshot.device.device_id?{...device,state:window.liveTarget}:device);
+        }
+        return new Response(JSON.stringify(snapshot),{status:200,headers:{'Content-Type':'application/json'}});
+      }
+      return window.beforeLatencyFetch(url,options);
+    };
+  `);
+  await until('window.livePollTimes.length>=2 && !loading');
+  await evaluate('window.injectLiveState=true;window.liveChangeAt=performance.now()');
+  await until("document.querySelector('#hero-state').textContent===window.liveExpected");
+  const browserLatency=await evaluate('Math.round(performance.now()-window.liveChangeAt)');
+  assert(browserLatency<2000,'Polling took more than 2 seconds: '+browserLatency);
+  console.log('BROWSER_UPDATE_MS='+browserLatency+' (isolated snapshot fixture, not firmware end-to-end)');
+  await evaluate('window.fetch=window.beforeLatencyFetch;renderCache.clear();load()');
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 650, deviceScaleFactor: 1, mobile: false });
   await checkStickyBars();
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
@@ -94,13 +122,19 @@ try {
   // Read-only fixture responses exercise page buttons without creating fake live records.
   await evaluate(`
     window.beforePaginationFetch=window.fetch;
-    window.fetch=(url,options={})=>{
+    window.fetch=async(url,options={})=>{
       const parsed=new URL(url,location.origin);
-      const kind=parsed.pathname.endsWith('/events')?'events':parsed.pathname.endsWith('/occurrences')?'occurrences':parsed.pathname==='/api/refill/audit'?'audit':parsed.pathname.endsWith('/commands')?'commands':null;
-      if(kind && options.method!=='POST' && parsed.searchParams.has('page')){
-        const page=Number(parsed.searchParams.get('page')||1),size=Number(parsed.searchParams.get('page_size')||8);
+      if(parsed.pathname.endsWith('/live') && options.method!=='POST'){
+        const response=await window.beforePaginationFetch(url,options);
+        const snapshot=await response.json();
+        const size=Number(parsed.searchParams.get('page_size')||8);
         const entries=Array.from({length:19},(_,index)=>({id:19-index,seq:19-index,event:'UNSCHEDULED_OPEN',device_id:'PB01',box_id:'PB01',patient_id:'P001',actor_id:'N01',slot_id:1,schedule_id:'S'+(19-index),scheduled_at:'2026-11-10T08:00:00+07:00',occurred_at:'2026-11-10T08:01:00+07:00',timestamp:'2026-11-10T08:01:00+07:00',result:'VERIFIED',current_outcome:'PENDING',command:'REQUEST_STATUS',command_id:'test-'+(19-index),status:'APPLIED'}));
-        return Promise.resolve(new Response(JSON.stringify({items:entries.slice((page-1)*size,page*size),page,page_size:size,pages:Math.ceil(19/size),total:19}),{status:200,headers:{'Content-Type':'application/json'}}));
+        for(const kind of ['events','occurrences','audit','commands']){
+          const page=Number(parsed.searchParams.get(kind+'_page')||1);
+          snapshot[kind]={items:entries.slice((page-1)*size,page*size),page,page_size:size,pages:Math.ceil(19/size),total:19};
+        }
+        snapshot.recent=entries.slice(0,4);
+        return new Response(JSON.stringify(snapshot),{status:200,headers:{'Content-Type':'application/json'}});
       }
       return window.beforePaginationFetch(url,options);
     };

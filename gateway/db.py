@@ -30,6 +30,7 @@ def connect(path=None):
 
 def init_db(path=None):
     db = connect(path)
+    db.execute("PRAGMA journal_mode=WAL")
     db.executescript(SCHEMA)
     migrate(db)
     db.commit()
@@ -92,10 +93,19 @@ def migrate(db):
             "boot_id": "TEXT",
             "queue_depth": "INTEGER DEFAULT 0",
             "queue_dropped": "INTEGER DEFAULT 0",
+            "storage_status": "TEXT",
+            "device_uptime_ms": "INTEGER",
+            "device_local_minute": "INTEGER",
+            "device_epoch_local": "INTEGER",
         },
         "schedules": {"medication_code": "TEXT"},
         "slot_assignments": {"version": "INTEGER NOT NULL DEFAULT 1"},
-        "environment_readings": {"sampled_at": "TEXT"},
+        "environment_readings": {
+            "sampled_at": "TEXT",
+            "boot_id": "TEXT",
+            "seq": "INTEGER",
+            "storage_status": "TEXT",
+        },
     }
     for table, columns in additions.items():
         existing = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
@@ -120,6 +130,7 @@ def migrate(db):
         # Keep the original table as a migration backup.
     db.executescript("""
         CREATE INDEX IF NOT EXISTS event_device_time ON medication_events(device_id,received_at);
+        CREATE INDEX IF NOT EXISTS environment_device_boot_seq ON environment_readings(device_id,boot_id,seq);
         CREATE TABLE IF NOT EXISTS command_requests (
             command_id TEXT PRIMARY KEY,device_id TEXT NOT NULL,command TEXT NOT NULL,payload TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'PENDING',created_at TEXT NOT NULL,ack_at TEXT);

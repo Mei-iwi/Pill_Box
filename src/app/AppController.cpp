@@ -6,7 +6,13 @@
 AppController::AppController() : mqtt_(wifi_) {}
 
 void AppController::begin() {
+#ifdef PILLBOX_SIMULATION
+    // ESP32-S2 UART0: RX=GPIO44, TX=GPIO43; connected to $serialMonitor in diagram.json.
+    Serial.begin(115200, SERIAL_8N1, 44, 43);
+    Serial.println("Wokwi: type TIME 09:00 or TIME 20:00, then press Enter.");
+#else
     Serial.begin(115200);
+#endif
     rtc_.begin();
     buttons_.begin();
     leds_.begin();
@@ -30,17 +36,25 @@ void AppController::update() {
     mqtt_.update();
     buttons_.update();
     buzzer_.update();
-    environment_.update();
+    const bool environmentUpdated=environment_.update();
 
 #ifdef PILLBOX_SIMULATION
     // Wokwi Serial Monitor: TIME 08:00, TIME 08:15, TIME 10:00, TIME 14:00.
     static char input[24]; static uint8_t inputLength=0;
     while (Serial.available()) {
         const char c=Serial.read();
-        if (c=='\n') { input[inputLength]='\0'; unsigned hour,minute;
-            if (sscanf(input,"TIME %u:%u",&hour,&minute)==2 && hour<24 && minute<60 && rtc_.setDemoTime(hour,minute)) Serial.println("DEMO clock updated");
+        if (c=='\n' || c=='\r') {
+            if (!inputLength) continue; // Ignore the second character of CRLF.
+            Serial.println();
+            input[inputLength]='\0'; unsigned hour,minute; char trailing;
+            if (sscanf(input,"TIME %u:%u %c",&hour,&minute,&trailing)==2 && hour<24 && minute<60 && rtc_.setDemoTime(hour,minute)) { statusDirty_=true; Serial.println("DEMO clock updated"); }
+            else Serial.println("Invalid command. Use TIME HH:MM (example: TIME 09:00).");
             inputLength=0;
-        } else if (c!='\r' && inputLength<sizeof(input)-1) input[inputLength++]=c;
+        } else if (c=='\b' || c==127) {
+            if (inputLength) { --inputLength; Serial.print("\b \b"); }
+        } else if (c>=32 && c<=126 && inputLength<sizeof(input)-1) {
+            input[inputLength++]=c; Serial.write(c);
+        }
     }
 #endif
 
@@ -65,14 +79,16 @@ void AppController::update() {
         state_ = "IDLE";
     }
 
-    if (millis() - lastHeartbeat_ >= AppConfig::HEARTBEAT_MS) {
+    const bool connected=mqtt_.connected();
+    const bool reconnected=connected && !wasConnected_;
+    wasConnected_=connected;
+    if (statusDirty_ || reconnected || strcmp(state_,lastPublishedState_) || millis() - lastHeartbeat_ >= AppConfig::HEARTBEAT_MS) {
         lastHeartbeat_ = millis();
-        mqtt_.publishHeartbeat(state_, ++sequence_);
+        lastPublishedState_=state_; statusDirty_=false;
+        mqtt_.publishHeartbeat(state_, ++sequence_,now.minuteOfDay,now.epoch);
     }
-    if (millis() - lastEnvironment_ >= AppConfig::ENVIRONMENT_PUBLISH_MS) {
-        lastEnvironment_ = millis();
-        const auto reading = environment_.reading();
-        mqtt_.publishEnvironment(reading.temperatureC, reading.humidityPercent, reading.sensorOk, now.epoch, ++sequence_);
+    const auto reading = environment_.reading();
+    if (environmentUpdated) {
         const auto transition=storageMonitor_.sample(reading.temperatureC,reading.humidityPercent,reading.sensorOk,
             stored_.maxTemperatureC,stored_.maxHumidityPercent,AppConfig::ENVIRONMENT_HYSTERESIS,AppConfig::ENVIRONMENT_CONFIRM_SAMPLES);
         if (transition!=StorageTransition::NONE) {
@@ -81,6 +97,10 @@ void AppController::update() {
             SchedulerEvent event{type,0,"ENV",0,now.minuteOfDay,0,now.dayKey,now.epoch,now.epoch};
             mqtt_.publishEvent(event,++sequence_);
         }
+    }
+    if (environmentUpdated || reconnected || millis()-lastEnvironment_ >= AppConfig::ENVIRONMENT_PUBLISH_MS) {
+        lastEnvironment_=millis();
+        mqtt_.publishEnvironment(reading.temperatureC,reading.humidityPercent,reading.sensorOk,now.epoch,++sequence_,storageMonitor_.status());
     }
 }
 
@@ -95,7 +115,9 @@ void AppController::handleEvent(const SchedulerEvent& event) {
         alertSilenced_ = false; leds_.setSlot(event.slotId, false); buzzer_.stop(); state_ = "IDLE";
     }
     if (event.type == EventType::MISSED) state_ = "ALERT";
-    mqtt_.publishEvent(event, ++sequence_);
+    state_=scheduler_.hasActiveReminder() ? (scheduler_.hasOverdueReminder() ? "ALERT" : "REMINDING") : "IDLE";
+    statusDirty_=true;
+    mqtt_.publishEvent(event, ++sequence_,state_);
 }
 
 void AppController::handleCommand(void* context, const char* payload) {

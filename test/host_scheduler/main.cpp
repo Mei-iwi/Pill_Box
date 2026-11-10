@@ -11,6 +11,16 @@ static SchedulerEvent take(Scheduler& scheduler) {
 }
 
 int main() {
+    StorageMonitor restartedMonitor;
+    assert(restartedMonitor.sample(25,50,true,30,70,2,3)==StorageTransition::NONE);
+    assert(restartedMonitor.sample(25,50,true,30,70,2,3)==StorageTransition::NONE);
+    assert(restartedMonitor.sample(25,50,true,30,70,2,3)==StorageTransition::NORMAL);
+    assert(std::string(restartedMonitor.status())=="NORMAL");
+    assert(restartedMonitor.sample(NAN,50,false,30,70,2,3)==StorageTransition::SENSOR_ERROR);
+    assert(std::string(restartedMonitor.status())=="SENSOR_ERROR");
+    assert(restartedMonitor.sample(25,50,true,30,70,2,3)==StorageTransition::NONE);
+    assert(restartedMonitor.sample(25,50,true,30,70,2,3)==StorageTransition::NONE);
+    assert(restartedMonitor.sample(25,50,true,30,70,2,3)==StorageTransition::NORMAL);
     StorageMonitor monitor;
     auto sample=[&](float t,float h,bool ok=true){return monitor.sample(t,h,ok,30,70,2,3);};
     assert(sample(25,50)==StorageTransition::NONE);

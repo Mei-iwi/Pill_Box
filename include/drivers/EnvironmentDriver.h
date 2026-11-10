@@ -5,7 +5,7 @@ struct EnvironmentReading { float temperatureC; float humidityPercent; bool sens
 class EnvironmentDriver {
 public:
     void begin();
-    void update();
+    bool update(); // True only for a new measurement (including a failed read).
     EnvironmentReading reading() const { return reading_; }
 private:
     EnvironmentReading reading_{0, 0, false};
