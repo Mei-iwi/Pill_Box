@@ -6,10 +6,11 @@
 
 static DHT dht(Pins::DHT, DHT22);
 void EnvironmentDriver::begin() { dht.begin(); }
-void EnvironmentDriver::update() {
-    if (millis() - lastRead_ < AppConfig::DHT_READ_MS) return;
+bool EnvironmentDriver::update() {
+    if (millis() - lastRead_ < AppConfig::DHT_READ_MS) return false;
     lastRead_ = millis();
     const float humidity = dht.readHumidity();
     const float temperature = dht.readTemperature();
     reading_ = {temperature, humidity, !isnan(temperature) && !isnan(humidity)};
+    return true;
 }

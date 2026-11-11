@@ -1,0 +1,5 @@
+{
+  "REPLACE_WITH_RANDOM_FAMILY_TOKEN_32_CHARS": {"actor_id":"FAMILY01","role":"family","devices":["PB01"]},
+  "REPLACE_WITH_RANDOM_NURSE_TOKEN_32_CHARS": {"actor_id":"NURSE01","role":"nurse","devices":["PB01","PB02"]},
+  "REPLACE_WITH_RANDOM_ADMIN_TOKEN_32_CHARS": {"actor_id":"ADMIN01","role":"admin","devices":[]}
+}

@@ -9,6 +9,7 @@
 #include "storage/SettingsStore.h"
 #include "communication/WifiManager.h"
 #include "communication/MqttClient.h"
+#include "domain/StorageMonitor.h"
 
 class AppController {
 public:
@@ -30,9 +31,12 @@ private:
     unsigned long lastHeartbeat_ = 0;
     unsigned long lastEnvironment_ = 0;
     const char* state_ = "IDLE";
+    const char* lastPublishedState_ = "";
+    bool statusDirty_ = true;
+    bool wasConnected_ = false;
     bool alertSilenced_ = false;
+    StorageMonitor storageMonitor_;
     static void handleCommand(void* context, const char* payload);
     void handleCommandPayload(const char* payload);
-    void processPendingEvent();
     void handleEvent(const SchedulerEvent& event);
 };
