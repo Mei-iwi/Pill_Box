@@ -27,6 +27,10 @@ try {
   await until('document.querySelector("#device").options.length===6');
   await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1050,deviceScaleFactor:1,mobile:false});
   await screenshot('.pio/local-accounts-desktop.png');
+  await evaluate('document.querySelector("[data-view=history]").click()');
+  await until('document.querySelectorAll("#environment-chart svg").length===2');
+  await evaluate('document.querySelector("#history-hours").value="24";document.querySelector("#history-hours").dispatchEvent(new Event("change"))');
+  await screenshot('.pio/lab-history-desktop.png');
   await evaluate('document.querySelector("[data-view=devices]").click()');
   await until('!document.querySelector("#simulator-panel").hidden');
   assert.equal(await evaluate('document.querySelectorAll("[data-simulator]").length'),10);

@@ -266,6 +266,7 @@ def create_local_app(path, identities):
             AUTH_IDENTITIES=identities,
             MQTT_CLIENT=fleet,
             REQUIRE_REFILL_SESSION=True,
+            HTTP_INGEST_ENABLED=True,
         )
     )
     app.config["LOCAL_SIMULATION"] = True

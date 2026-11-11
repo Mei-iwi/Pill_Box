@@ -1,6 +1,7 @@
 #include <cassert>
 #include <iostream>
 #include "app/Scheduler.h"
+#include "domain/TelemetryGate.h"
 #include "domain/EventBuffer.h"
 #include "domain/StorageMonitor.h"
 #include "domain/RefillWindow.h"
@@ -12,6 +13,19 @@ static SchedulerEvent take(Scheduler& scheduler) {
 }
 
 int main() {
+    TelemetryGate gate;
+    assert(gate.shouldPublish(25,50,true,0));
+    assert(!gate.shouldPublish(25.1f,51,true,2000));
+    assert(gate.shouldPublish(25.5f,51,true,4000));
+    assert(!gate.shouldPublish(25.5f,51,true,33999));
+    assert(gate.shouldPublish(25.5f,51,true,34000));
+    assert(gate.shouldPublish(NAN,NAN,false,34001));
+    assert(!gate.shouldPublish(NAN,NAN,false,35000));
+    assert(gate.shouldPublish(NAN,NAN,false,35001,true));
+    TelemetryGate wrapped;
+    assert(wrapped.shouldPublish(25,50,true,0xfffffff0UL));
+    assert(!wrapped.shouldPublish(25,50,true,100));
+    assert(wrapped.shouldPublish(25,50,true,30000));
     RefillWindow refill;
     const char* sid="0123456789abcdef0123456789abcdef";
     assert(!refill.begin(1,sid,1704067500,0,100));

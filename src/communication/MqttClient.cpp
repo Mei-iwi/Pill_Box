@@ -184,13 +184,15 @@ void MqttClient::publishHeartbeat(const char* state, uint32_t sequence, uint16_t
     doc["boot_id"] = bootId_;
     doc["uptime_ms"]=millis();
     doc["utc_synced"]=time(nullptr)>=1704067200;
+    doc["wifi_rssi"]=WiFi.RSSI();
+    doc["ip_address"]=WiFi.localIP().toString();
     if (minute<1440) { doc["device_local_minute"]=minute; doc["device_epoch_local"]=epoch; }
     if (mutex_) {
         xSemaphoreTake(mutex_,portMAX_DELAY);
         doc["queue_depth"] = queue_.size(); doc["queue_dropped"] = queue_.dropped();
         xSemaphoreGive(mutex_);
     }
-    char payload[384]; serializeJson(doc, payload, sizeof(payload));
+    char payload[512]; serializeJson(doc, payload, sizeof(payload));
     publishKind("heartbeat", payload,false,true);
 }
 

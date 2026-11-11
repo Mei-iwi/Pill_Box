@@ -57,6 +57,12 @@ def configure_auth(app, test_config):
         role = identity["role"]
         if request.path.startswith("/api/refill") and role not in ("nurse", "admin"):
             return jsonify(error="caregiver role required"), 403
+        if (
+            request.method == "POST"
+            and request.path.endswith("/commands")
+            and role not in ("nurse", "admin")
+        ):
+            return jsonify(error="caregiver role required"), 403
         if body.get("command") == "UPDATE_SCHEDULE" and role != "admin":
             return jsonify(error="admin role required"), 403
         device = (request.view_args or {}).get("device_id") or body.get("box_id")

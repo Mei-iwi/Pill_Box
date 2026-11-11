@@ -21,6 +21,7 @@ const labels = {
   STALE_VERIFICATION: 'Thông tin ngăn đã thay đổi. Vui lòng xác minh lại.',
   APPLIED: 'Đã áp dụng', REJECTED: 'Đã từ chối', INVALID_ACK: 'Phản hồi không hợp lệ',
   PUBLISH_FAILED: 'Gửi không thành công',
+  TIMEOUT: 'Hết thời gian chờ ACK',
   REQUEST_STATUS: 'Đọc trạng thái', CLEAR_ALERT: 'Tắt âm & đèn nhắc',
   UPDATE_SCHEDULE: 'Cập nhật lịch'
 };
@@ -35,6 +36,7 @@ let currentView = 'overview', knownDevices = [], currentSlots = [], lastCommandI
 let bootstrapReady = false, accessBlocked = false;
 let loginInProgress = false, authVersion = 0;
 let refillSessionId = null;
+let historyKey = '', historyFetchedAt = 0, historyLoading = false;
 const renderCache = new Map();
 function renderChanged(name, value, render) {
   const fingerprint = JSON.stringify(value);
@@ -174,7 +176,9 @@ function renderDevices(devices, device) {
     (item.status === 'online' ? 'Đã kết nối' : 'Ngoại tuyến') + '</span></div><div class="device-info"><div>Người dùng<strong>' +
     esc(item.patient_name || item.patient_id) + '</strong></div><div>Trạng thái<strong>' + esc(labels[item.state] || 'Chưa có dữ liệu') +
     '</strong></div><div>Giờ UTC<strong>' + (item.utc_synced ? 'Đã đồng bộ' : 'Đang chờ đồng bộ') + '</strong></div><div>Cập nhật lần cuối<strong>' + esc(dateTime(item.last_seen)) +
-    '</strong></div><div>Hàng đợi<strong>' + esc(item.queue_depth || 0) + ' chờ · ' + esc(item.queue_dropped || 0) + ' bỏ do đầy</strong></div></div></article>').join('');
+    '</strong></div><div>Hàng đợi<strong>' + esc(item.queue_depth || 0) + ' chờ · ' + esc(item.queue_dropped || 0) + ' bỏ do đầy</strong></div>' +
+    (Number.isInteger(item.wifi_rssi) ? '<div>Wi-Fi<strong>' + esc(item.wifi_rssi) + ' dBm</strong></div>' : '') +
+    (item.ip_address ? '<div>Địa chỉ IP<strong>' + esc(item.ip_address) + '</strong></div>' : '') + '</div></article>').join('');
   const online = device?.status === 'online';
   $('#connection').classList.toggle('online', online);
   $('#connection').replaceChildren(Object.assign(document.createElement('i'), { ariaHidden: 'true' }),
@@ -253,7 +257,7 @@ function renderAudit(audit, device) {
 }
 function renderCommands(commands) {
   $('#commands').innerHTML = commands.map(command => '<div class="command-row"><span>' +
-    esc(labels[command.command] || command.command) + '</span>' + badge(command.status, command.status === 'PENDING' ? 'Chờ phản hồi' : null) + '</div>').join('');
+    esc(labels[command.command] || command.command) + (Number.isFinite(command.ack_latency_ms) ? '<small> · ACK ' + esc(command.ack_latency_ms) + ' ms</small>' : '') + '</span>' + badge(command.status, command.status === 'PENDING' ? 'Chờ phản hồi' : null) + '</div>').join('');
   const latest = commands.find(command => command.command_id === lastCommandId);
   if (latest && latest.status !== 'PENDING') message('#command-result',
     latest.status === 'APPLIED' ? 'Thiết bị đã phản hồi.' : labels[latest.status] || latest.status,
@@ -280,6 +284,33 @@ function renderPagination(name, result) {
     makeButton(result.page + 1, 'Sau', result.page === result.pages);
 }
 
+async function loadHistory(force = false) {
+  if (currentView !== 'history' || historyLoading || accessBlocked || loginInProgress) return;
+  const device = selected(), version = authVersion, hours = $('#history-hours').value;
+  const key = device + ':' + hours + ':' + version;
+  if (!force && key === historyKey && Date.now() - historyFetchedAt < 10000) return;
+  historyLoading = true;
+  try {
+    const result = await api('/api/devices/' + encodeURIComponent(device) + '/environment/history?hours=' + hours);
+    if (device !== selected() || version !== authVersion || hours !== $('#history-hours').value) return;
+    historyKey = key; historyFetchedAt = Date.now();
+    const points = result.items;
+    if (!points.length) { $('#environment-chart').innerHTML = '<p class="empty">Chưa có mẫu hợp lệ trong khoảng đã chọn.</p>'; return; }
+    const plot = (field, title, color, minRange) => {
+      const values = points.map(p => p[field]);
+      const low = Math.floor(Math.min(...values) - minRange), high = Math.ceil(Math.max(...values) + minRange);
+      const x = i => 50 + (points.length === 1 ? 320 : i * 640 / (points.length - 1));
+      const y = v => 145 - (v - low) * 110 / (high - low);
+      return '<svg viewBox="0 0 740 180" role="img" aria-label="' + title + '"><text x="50" y="18">' + title + '</text>' +
+        '<path d="M50 30V145H700" fill="none" stroke="#aaa"/><text x="4" y="40">' + high + '</text><text x="4" y="145">' + low + '</text>' +
+        '<polyline points="' + values.map((v,i) => x(i)+','+y(v)).join(' ') + '" fill="none" stroke="' + color + '" stroke-width="2.5"/>' +
+        values.map((v,i) => '<circle cx="'+x(i)+'" cy="'+y(v)+'" r="3" fill="'+color+'"><title>'+esc(number(v))+'</title></circle>').join('') +
+        '<text x="50" y="170">' + esc(clock(points[0].received_at)) + '</text><text x="640" y="170">' + esc(clock(points.at(-1).received_at)) + '</text></svg>';
+    };
+    $('#environment-chart').innerHTML = plot('temperature_c','Nhiệt độ (°C)','#e05224',1) + plot('humidity_percent','Độ ẩm (% RH)','#0757ed',2);
+  } catch (error) { $('#environment-chart').textContent = error.message; }
+  finally { historyLoading = false; }
+}
 function renderSession(session) {
   $('#session').textContent = session.auth_enabled
     ? session.identity.actor_id + ' · ' + roleLabels[session.identity.role] : 'Không yêu cầu khóa truy cập.';
@@ -337,6 +368,7 @@ async function load() {
     renderChanged('events-page', events, () => renderPagination('events', events));
     renderChanged('occurrences-page', occurrences, () => renderPagination('occurrences', occurrences));
     renderChanged('environment', [readings, current.storage_status], () => renderEnvironment(readings, current));
+    loadHistory();
     renderChanged('audit', audit, () => renderAudit(audit.items, device));
     renderChanged('audit-page', audit, () => renderPagination('audit', audit));
     renderChanged('commands', [commands, lastCommandId], () => renderCommands(commands.items));
@@ -447,6 +479,7 @@ $('#device').addEventListener('change', () => {
 });
 $('#refill-form').addEventListener('input', () => { resetVerification(true); renderRefillContext(); });
 $('#slot').addEventListener('change', () => { resetVerification(true); renderRefillContext(); });
+$('#history-hours').addEventListener('change', () => loadHistory(true));
 $('#settings-open').addEventListener('click', () => $('#settings-dialog').showModal());
 $('#settings-close').addEventListener('click', () => $('#settings-dialog').close());
 $('#login').addEventListener('click', async () => {

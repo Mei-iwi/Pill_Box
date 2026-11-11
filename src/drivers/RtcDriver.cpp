@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <RTClib.h>
+#include <time.h>
 
 #ifdef PILLBOX_SIMULATION
 static RTC_DS1307 rtc;
@@ -26,13 +27,25 @@ bool RtcDriver::setDemoTime(uint8_t hour, uint8_t minute) {
 
 bool RtcDriver::begin() {
     Wire.begin(Pins::RTC_SDA, Pins::RTC_SCL);
-    ready_ = rtc.begin();
+    present_ = rtc.begin();
+    ready_ = present_;
 #ifdef PILLBOX_SIMULATION
     if (ready_) ready_=rtc.isrunning();
 #else
     if (ready_) ready_=!rtc.lostPower();
 #endif
     return ready_;
+}
+
+bool RtcDriver::synchronizeUtc(uint32_t utc) {
+#ifdef PILLBOX_SIMULATION
+    return false; // Keep the controlled Wokwi RTC and TIME commands independent of NTP.
+#else
+    if (utc<1704067200UL || utc>4102444799UL) return false;
+    if (present_) { rtc.adjust(DateTime(utc+7UL*3600UL)); ready_=true; }
+    cached_=false;
+    return true;
+#endif
 }
 
 ClockTime RtcDriver::now() const {
@@ -46,6 +59,15 @@ ClockTime RtcDriver::now() const {
         return cachedTime_;
         }
     }
+#ifndef PILLBOX_SIMULATION
+    const time_t utc=time(nullptr);
+    if (utc>=1704067200 && utc<=4102444799LL) {
+        const DateTime t(static_cast<uint32_t>(utc)+7UL*3600UL);
+        cachedTime_={static_cast<uint16_t>(t.hour()*60+t.minute()),t.second(),
+            static_cast<uint32_t>(t.year())*10000UL+t.month()*100UL+t.day(),t.unixtime()};
+        return cachedTime_;
+    }
+#endif
     const unsigned long seconds = millis() / 1000UL;
     cachedTime_={static_cast<uint16_t>((seconds / 60UL) % 1440UL), static_cast<uint16_t>(seconds % 60UL),
             1UL + seconds / 86400UL, 0};

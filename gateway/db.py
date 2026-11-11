@@ -100,6 +100,8 @@ def migrate(db):
             "device_local_minute": "INTEGER",
             "device_epoch_local": "INTEGER",
             "utc_synced": "INTEGER NOT NULL DEFAULT 0",
+            "wifi_rssi": "INTEGER",
+            "ip_address": "TEXT",
         },
         "schedules": {"medication_code": "TEXT"},
         "slot_assignments": {"version": "INTEGER NOT NULL DEFAULT 1"},
@@ -167,6 +169,9 @@ def migrate(db):
         r[1] for r in db.execute("PRAGMA table_info(medication_events)")
     }:
         db.execute("ALTER TABLE medication_events ADD COLUMN refill_session_id TEXT")
+    from .rule_engine import initialize_rules
+
+    initialize_rules(db)
 
 
 def rows(db, sql, args=()):
