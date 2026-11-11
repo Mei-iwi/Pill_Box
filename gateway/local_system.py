@@ -8,12 +8,12 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
 from flask import g, jsonify, request
 
 from .accounts import DEFAULT_PATH, create_accounts
+from .config import load_environment, project_path
 from .app import create_app
 from .db import connect, init_db
 from .mqtt_service import store_message
@@ -266,7 +266,7 @@ def create_local_app(path, identities):
             AUTH_IDENTITIES=identities,
             MQTT_CLIENT=fleet,
             REQUIRE_REFILL_SESSION=True,
-            HTTP_INGEST_ENABLED=True,
+            HTTP_INGEST_ENABLED=os.getenv("PILLBOX_HTTP_INGEST", "1") == "1",
         )
     )
     app.config["LOCAL_SIMULATION"] = True
@@ -306,14 +306,17 @@ def create_local_app(path, identities):
     return app
 
 
-def main():
+def main(argv=None):
+    load_environment()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", default="gateway/data/pillbox.db")
-    parser.add_argument("--port", type=int, default=5000)
-    args = parser.parse_args()
+    parser.add_argument(
+        "--db", default=os.getenv("PILLBOX_DB", "gateway/data/pillbox.db")
+    )
+    parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "5000")))
+    args = parser.parse_args(argv)
     # This mode never connects the dataset to an external broker.
     os.environ["PILLBOX_MQTT_AUTOSTART"] = "0"
-    path = Path(args.db)
+    path = project_path(args.db)
     init_db(path)
     with connect(path) as db:
         profile = db.execute(
@@ -325,12 +328,20 @@ def main():
             + str(path)
             + " --realistic first (backs up existing data)."
         )
-    app = create_local_app(path, create_accounts(DEFAULT_PATH))
+    auth_path = project_path(os.getenv("PILLBOX_AUTH_FILE") or DEFAULT_PATH)
+    app = create_local_app(path, create_accounts(auth_path))
     fleet = app.extensions["local_fleet"]
     fleet.start()
-    print(f"Local software simulators PB01–PB06: http://127.0.0.1:{args.port}")
+    bind = os.getenv("PILLBOX_BIND", "127.0.0.1")
+    print(f"Local software simulators PB01–PB06: http://{bind}:{args.port}")
     try:
-        app.run(host="127.0.0.1", port=args.port, debug=False, use_reloader=False)
+        app.run(
+            host=bind,
+            port=args.port,
+            debug=False,
+            use_reloader=False,
+            load_dotenv=False,
+        )
     finally:
         fleet.stop()
 

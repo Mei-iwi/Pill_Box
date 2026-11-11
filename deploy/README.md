@@ -75,7 +75,9 @@ docker compose -f deploy/compose.yaml cp web:/data/caddy/pki/authorities/local/r
 
 Chép **deploy/runtime/device-PB01.h** thành **include/config/Secrets.h**, điền Wi-Fi cho board thật rồi build. Header chứa CA công khai và mật khẩu riêng của hộp; không commit. Với Wokwi, cần **Private IoT Gateway** để truy cập broker trên máy/LAN hoặc dùng tên miền TLS có thể truy cập từ simulator. Nếu dùng host.wokwi.internal, đổi MQTT_HOST sang tên này; chứng thư do script tạo đã có SAN tương ứng. Chỉ thay host không làm broker localhost tự truy cập được từ Wokwi cloud. Tham khảo [mạng ESP32 của Wokwi](https://docs.wokwi.com/guides/esp32-wifi).
 
-Nếu chạy Gateway ngoài Docker, tự đặt MQTT_HOST, MQTT_PORT=8883, MQTT_TLS=1, MQTT_CA_FILE, MQTT_USER, MQTT_PASSWORD, PILLBOX_AUTH_FILE và PILLBOX_DEPLOYMENT=care. Cặp MQTT_CERT_FILE/MQTT_KEY_FILE là tùy chọn khi broker yêu cầu chứng thư client. Không có chế độ bỏ kiểm CA/tên máy chủ. Đặt HTTPS trước Gateway khi truy cập từ xa.
+Nếu chạy Gateway ngoài Docker, lưu cấu hình vào `gateway/.env`: PILLBOX_MODE=mqtt, PILLBOX_MQTT_AUTOSTART=1, MQTT_HOST, MQTT_PORT=8883, MQTT_TLS=1, MQTT_CA_FILE, MQTT_USER, MQTT_PASSWORD, PILLBOX_AUTH_FILE và PILLBOX_DEPLOYMENT=care. Sau đó chạy `python -m gateway` bằng Python `.venv`; không cần export lại mỗi lần. Đường dẫn tương đối tính từ thư mục gốc repository. Cặp MQTT_CERT_FILE/MQTT_KEY_FILE là tùy chọn khi broker yêu cầu chứng thư client. Không có chế độ bỏ kiểm CA/tên máy chủ. Đặt HTTPS trước Gateway khi truy cập từ xa.
+
+Docker Compose tiếp tục lấy cấu hình từ `deploy/runtime/gateway.env` và khối `environment` của service. Service đặt PILLBOX_MODE=mqtt và PILLBOX_LOAD_ENV=0 để chỉ dùng cấu hình Docker; file cấu hình local không được đóng vào image. Khi bật đọc file ngoài Docker, các biến terminal vẫn ưu tiên hơn `.env`.
 
 ### Đăng ký hộp mới
 
