@@ -115,7 +115,7 @@ def create_app(test_config=None):
         "DB_PATH",
         os.getenv("PILLBOX_DB", str(Path(__file__).parent / "data" / "pillbox.db")),
     )
-    app.config.update(DB_PATH=db_path)
+    app.config.update(DB_PATH=db_path, TEMPLATES_AUTO_RELOAD=True)
     app.config["MQTT_CLIENT"] = (test_config or {}).get("MQTT_CLIENT")
     app.config["REQUIRE_REFILL_SESSION"] = (test_config or {}).get(
         "REQUIRE_REFILL_SESSION", os.getenv("PILLBOX_DEPLOYMENT") == "care"
@@ -133,14 +133,18 @@ def create_app(test_config=None):
     @app.get("/api/session")
     def session_info():
         return jsonify(
-            identity=g.identity, auth_enabled=app.config["AUTH_IDENTITIES"] is not None
+            identity=g.identity,
+            auth_enabled=app.config["AUTH_IDENTITIES"] is not None,
+            local_simulation=app.config.get("LOCAL_SIMULATION", False),
         )
 
     register_care_routes(app, page_data)
 
     @app.get("/")
     def dashboard():
-        return render_template("dashboard.html")
+        response = app.make_response(render_template("dashboard.html"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/api/devices")
     def devices():
@@ -245,6 +249,7 @@ def create_app(test_config=None):
                     "session": {
                         "identity": g.identity,
                         "auth_enabled": app.config["AUTH_IDENTITIES"] is not None,
+                        "local_simulation": app.config.get("LOCAL_SIMULATION", False),
                     },
                     "server_received_at": utc_now(),
                 }

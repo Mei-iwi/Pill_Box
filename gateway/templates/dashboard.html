@@ -88,13 +88,30 @@
 
     <div id="view-devices" class="view" hidden>
       <div class="page-heading"><div><h1>Thiết bị</h1></div></div>
+      {% if config.get('LOCAL_SIMULATION') %}
+      <section id="simulator-panel" class="surface section-block standalone simulator-panel" hidden>
+        <div class="section-heading"><h2>Mô phỏng phần mềm · Hộp đang chọn</h2></div>
+        <div class="form-actions">
+          <button class="button primary" data-simulator="remind">Nhắc ngăn 1</button>
+          <button class="button secondary" data-simulator="missed">Quá giờ ngăn 1</button>
+          <button class="button secondary" data-simulator="open1">Mở ngăn 1</button>
+          <button class="button secondary" data-simulator="open2">Mở ngăn 2</button>
+          <button class="button secondary" data-simulator="open3">Mở ngăn 3</button>
+          <button class="button secondary" data-simulator="hot">Nóng / ẩm cao</button>
+          <button class="button secondary" data-simulator="normal">Môi trường bình thường</button>
+          <button class="button secondary" data-simulator="sensor">Lỗi cảm biến</button>
+          <button class="button secondary" data-simulator="offline">Ngắt kết nối</button>
+          <button class="button secondary" data-simulator="online">Kết nối lại</button>
+        </div><p id="simulator-result" class="inline-message" role="status" hidden></p>
+      </section>
+      {% endif %}
       <div id="devices" class="device-grid"></div>
       <section class="surface section-block standalone"><div class="section-heading"><h2>Điều khiển hộp đang chọn</h2><span id="control-device" class="tag neutral">PB01</span></div><div class="form-actions"><button class="button primary" onclick="sendCommand('REQUEST_STATUS')">Cập nhật trạng thái</button><button class="button secondary" onclick="sendCommand('CLEAR_ALERT')">Tắt âm & đèn nhắc</button></div><p id="command-result" class="inline-message" role="status" hidden></p><div id="commands" class="command-list"></div><nav id="commands-pagination" class="pagination" aria-label="Phân trang lệnh"></nav></section>
     </div>
 
   </main>
 
-  <dialog id="settings-dialog"><div class="dialog-heading"><h2>Truy cập hệ thống</h2><button id="settings-close" class="icon-button" aria-label="Đóng">×</button></div><p id="session" class="section-note">Đang kiểm tra kết nối…</p><label>Khóa truy cập API<input id="access-token" type="password" autocomplete="off" placeholder="Nhập khóa cá nhân"></label><button id="login" class="button primary">Kết nối</button></dialog>
-  <script src="/static/dashboard.js"></script>
+  <dialog id="settings-dialog"><div class="dialog-heading"><h2>Truy cập hệ thống</h2><button id="settings-close" class="icon-button" aria-label="Đóng">×</button></div><p id="session" class="section-note">Đang kiểm tra kết nối…</p><label>Khóa truy cập API<input id="access-token" type="password" autocomplete="off" placeholder="Nhập khóa cá nhân"></label><button id="login" class="button primary">Kết nối</button><p id="login-result" class="inline-message" role="status" aria-live="polite" hidden></p></dialog>
+  <script src="/static/dashboard.js?v=accounts-fleet-3"></script>
 </body>
 </html>

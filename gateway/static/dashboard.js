@@ -33,6 +33,7 @@ let token = '', verification = null, verificationContext = '', expiresAt = 0;
 let loading = false, refreshQueued = false, caregiver = true, authPrompted = false;
 let currentView = 'overview', knownDevices = [], currentSlots = [], lastCommandId = null;
 let bootstrapReady = false, accessBlocked = false;
+let loginInProgress = false, authVersion = 0;
 let refillSessionId = null;
 const renderCache = new Map();
 function renderChanged(name, value, render) {
@@ -65,7 +66,8 @@ function number(value) {
 }
 function scheduleTime(schedule) { return String(schedule.hour).padStart(2, '0') + ':' + String(schedule.minute).padStart(2, '0'); }
 function message(selector, text, kind = '') {
-  const element = $(selector);
+  const element = $(selector) || (selector === '#login-result' ? $('#session') : null);
+  if (!element) return;
   element.textContent = text;
   element.hidden = !text;
   element.classList.remove('success', 'danger');
@@ -278,13 +280,30 @@ function renderPagination(name, result) {
     makeButton(result.page + 1, 'Sau', result.page === result.pages);
 }
 
+function renderSession(session) {
+  $('#session').textContent = session.auth_enabled
+    ? session.identity.actor_id + ' · ' + roleLabels[session.identity.role] : 'Không yêu cầu khóa truy cập.';
+  caregiver = !session.auth_enabled || ['nurse', 'admin'].includes(session.identity.role);
+  $('#settings-open').textContent = session.auth_enabled
+    ? session.identity.actor_id + ' · ' + roleLabels[session.identity.role] : 'Tài khoản · Chưa bật xác thực';
+  $('#settings-open').title = $('#session').textContent;
+  if ($('#simulator-panel')) $('#simulator-panel').hidden = !session.local_simulation || !caregiver;
+  document.querySelectorAll('.caregiver-control').forEach(button => { button.hidden = !caregiver; });
+  $('#refill-panel').hidden = !caregiver;
+  $('#actor-field').hidden = session.auth_enabled;
+  if (session.auth_enabled) $('#actor').value = session.identity.actor_id;
+  if (!caregiver && currentView === 'refill') showView('overview');
+}
 async function load() {
+  if (loginInProgress) { refreshQueued = true; return; }
   if (loading) { refreshQueued = true; return; }
   loading = true;
+  const version = authVersion;
   let device = selected();
   try {
     if (!bootstrapReady) {
       const assigned = await api('/api/devices');
+      if (version !== authVersion) return;
       if (!assigned.length) throw new Error('Chưa có hộp thuốc được phân công.');
       knownDevices = assigned;
       $('#device').replaceChildren(...assigned.map(item => new Option(item.device_id, item.device_id)));
@@ -300,16 +319,10 @@ async function load() {
     query.set('actor_id',$('#actor').value.trim());
     for (const [name, page] of Object.entries(listPages)) query.set(name + '_page', String(page));
     const snapshot = await api('/api/devices/' + encodeURIComponent(device) + '/live?' + query);
+    if (version !== authVersion) return;
     if (device !== selected()) { refreshQueued = true; return; }
     const { session, devices, events, readings, schedules, occurrences, slots, audit, commands, recent } = snapshot;
-    $('#session').textContent = session.auth_enabled
-      ? session.identity.actor_id + ' · ' + roleLabels[session.identity.role] : 'Không yêu cầu khóa truy cập.';
-    caregiver = !session.auth_enabled || ['nurse', 'admin'].includes(session.identity.role);
-    document.querySelectorAll('.caregiver-control').forEach(button => { button.hidden = !caregiver; });
-    $('#refill-panel').hidden = !caregiver;
-    $('#actor-field').hidden = session.auth_enabled;
-    if (session.auth_enabled) $('#actor').value = session.identity.actor_id;
-    if (!caregiver && currentView === 'refill') showView('overview');
+    renderSession(session);
     knownDevices = devices;
     const options = devices.map(item => item.device_id);
     if (JSON.stringify(options) !== JSON.stringify([...$('#device').options].map(option => option.value))) {
@@ -334,12 +347,15 @@ async function load() {
     if (snapshot.alerts) renderChanged('alerts-page',snapshot.alerts,()=>renderPagination('alerts',snapshot.alerts));
     message('#error', '');
   } catch (error) {
+    if (version !== authVersion) return;
     message('#error', error.message);
     $('#connection').classList.remove('online');
     $('#connection').textContent = error.status === 401 ? 'Cần đăng nhập' : 'Chưa kết nối';
     renderCache.clear();
     if (error.status === 403) bootstrapReady = false;
     if (error.status === 401) {
+      $('#settings-open').textContent = 'Chưa đăng nhập';
+      $('#session').textContent = 'Chưa đăng nhập';
       accessBlocked = true; bootstrapReady = false;
       if (!authPrompted) {
         authPrompted = true;
@@ -433,14 +449,46 @@ $('#refill-form').addEventListener('input', () => { resetVerification(true); ren
 $('#slot').addEventListener('change', () => { resetVerification(true); renderRefillContext(); });
 $('#settings-open').addEventListener('click', () => $('#settings-dialog').showModal());
 $('#settings-close').addEventListener('click', () => $('#settings-dialog').close());
-$('#login').addEventListener('click', () => {
-  token = $('#access-token').value.trim();
-  $('#access-token').value = '';
-  authPrompted = false; bootstrapReady = false; accessBlocked = false; renderCache.clear();
-  resetVerification();
-  $('#settings-dialog').close();
-  load();
+$('#login').addEventListener('click', async () => {
+  if (loginInProgress) return;
+  loginInProgress = true;
+  authVersion++;
+  $('#login').disabled = true;
+  try {
+    message('#login-result', 'Đang kiểm tra khóa truy cập…');
+    token = $('#access-token').value.trim();
+    $('#access-token').value = '';
+    authPrompted = false; bootstrapReady = false; accessBlocked = false; renderCache.clear();
+    resetVerification();
+    const session = await api('/api/session');
+    renderSession(session);
+    message('#login-result', session.auth_enabled
+      ? 'Đăng nhập thành công: ' + session.identity.actor_id + ' · ' + roleLabels[session.identity.role]
+      : 'Máy chủ chưa bật xác thực. Không cần nhập khóa.', 'success');
+    message('#error', '');
+  } catch (error) {
+    accessBlocked = true;
+    $('#session').textContent = 'Chưa đăng nhập';
+    $('#settings-open').textContent = 'Chưa đăng nhập';
+    message('#login-result', error.status === 401 ? 'Khóa truy cập không hợp lệ hoặc chưa được nhập.' : error.message, 'danger');
+  } finally {
+    loginInProgress = false;
+    $('#login').disabled = false;
+    if (!accessBlocked) load();
+  }
 });
+$('#access-token').addEventListener('keydown', event => {
+  if (event.key === 'Enter') { event.preventDefault(); $('#login').click(); }
+});
+document.querySelectorAll('[data-simulator]').forEach(button => button.addEventListener('click', async () => {
+  button.disabled = true;
+  try {
+    await api('/api/simulator/action', { box_id: selected(), action: button.dataset.simulator });
+    message('#simulator-result', 'Đã thực hiện trên ' + selected() + '.', 'success');
+    load();
+  } catch (error) { message('#simulator-result', error.message, 'danger'); }
+  finally { button.disabled = false; }
+}));
 $('#settings-dialog').addEventListener('click', event => {
   if (event.target === $('#settings-dialog')) {
     const rect = event.target.getBoundingClientRect();

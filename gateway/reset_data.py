@@ -12,6 +12,8 @@ from .db import connect, init_db, seed_defaults
 
 DATA_ROOT = (Path(__file__).parent / "data").resolve()
 TABLES = (
+    "alerts",
+    "refill_sessions",
     "refill_verifications",
     "refill_audit_logs",
     "command_requests",
@@ -24,10 +26,11 @@ TABLES = (
     "medication_catalog",
     "devices",
     "patients",
+    "app_settings",
 )
 
 
-def reset_data(path):
+def reset_data(path, realistic=False):
     target = Path(path).resolve()
     if not target.is_relative_to(DATA_ROOT) or target.suffix != ".db":
         raise ValueError("Only .db files inside gateway/data can be reset")
@@ -52,14 +55,20 @@ def reset_data(path):
         for table in TABLES:
             if table in existing:
                 db.execute(f"DELETE FROM {table}")
-        seed_defaults(db)
+        if realistic:
+            from .sample_data import seed_care_dataset
+
+            seed_care_dataset(db)
+        else:
+            seed_defaults(db)
     return backup
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", action="append", required=True)
+    parser.add_argument("--realistic", action="store_true")
     args = parser.parse_args()
     for item in args.db:
-        saved = reset_data(item)
+        saved = reset_data(item, realistic=args.realistic)
         print(f"Reset: {Path(item).resolve()} | Backup: {saved or 'new database'}")

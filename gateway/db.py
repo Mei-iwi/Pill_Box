@@ -40,6 +40,8 @@ def init_db(path=None):
 
 
 def seed_defaults(db):
+    if db.execute("SELECT 1 FROM app_settings WHERE key='dataset_profile'").fetchone():
+        return
     for device, patient in (("PB01", "P001"), ("PB02", "P002")):
         db.execute(
             "INSERT OR IGNORE INTO devices(device_id, patient_id) VALUES (?, ?)",
