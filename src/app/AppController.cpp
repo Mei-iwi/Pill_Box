@@ -59,6 +59,11 @@ void AppController::update() {
     }
 #endif
 
+    if (!rtcSynchronized_ || millis()-lastRtcSync_>=21600000UL) {
+        if (rtc_.synchronizeUtc(static_cast<uint32_t>(time(nullptr)))) {
+            lastRtcSync_=millis(); rtcSynchronized_=true;
+        }
+    }
     const ClockTime now = rtc_.now();
     scheduler_.update(now.dayKey, now.minuteOfDay, now.epoch);
     while (true) { SchedulerEvent event; if (!scheduler_.takeEvent(event)) break; handleEvent(event); }
@@ -93,17 +98,20 @@ void AppController::update() {
         mqtt_.publishHeartbeat(state_, ++sequence_,now.minuteOfDay,now.epoch);
     }
     const auto reading = environment_.reading();
+    bool storageChanged=false;
     if (environmentUpdated) {
         const auto transition=storageMonitor_.sample(reading.temperatureC,reading.humidityPercent,reading.sensorOk,
             stored_.maxTemperatureC,stored_.maxHumidityPercent,AppConfig::ENVIRONMENT_HYSTERESIS,AppConfig::ENVIRONMENT_CONFIRM_SAMPLES);
         if (transition!=StorageTransition::NONE) {
+            storageChanged=true;
             const EventType type=transition==StorageTransition::SENSOR_ERROR ? EventType::SENSOR_ERROR :
                 transition==StorageTransition::WARNING ? EventType::STORAGE_WARNING : EventType::STORAGE_NORMAL;
             SchedulerEvent event{type,0,"ENV",0,now.minuteOfDay,0,now.dayKey,now.epoch,now.epoch};
             mqtt_.publishEvent(event,++sequence_);
         }
     }
-    if (environmentUpdated || reconnected || millis()-lastEnvironment_ >= AppConfig::ENVIRONMENT_PUBLISH_MS) {
+    if ((environmentUpdated || reconnected) && telemetryGate_.shouldPublish(
+        reading.temperatureC,reading.humidityPercent,reading.sensorOk,millis(),reconnected || storageChanged)) {
         lastEnvironment_=millis();
         mqtt_.publishEnvironment(reading.temperatureC,reading.humidityPercent,reading.sensorOk,now.epoch,++sequence_,storageMonitor_.status());
     }

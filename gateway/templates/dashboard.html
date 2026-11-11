@@ -68,6 +68,7 @@
       <div class="page-heading"><div><h1>Lịch sử hoạt động</h1></div></div>
       <section class="surface section-block standalone"><div class="section-heading"><h2>Mở ngăn & cảnh báo</h2></div><div class="table-wrap"><table><thead><tr><th>Thời gian</th><th>Hoạt động</th><th>Lịch / ngăn</th><th>Trễ</th></tr></thead><tbody id="events"></tbody></table></div><nav id="events-pagination" class="pagination" aria-label="Phân trang lịch sử"></nav></section>
       <section id="environment" class="surface section-block standalone"><h2>Môi trường bảo quản</h2><p class="empty">Chưa có dữ liệu cảm biến.</p></section>
+      <section class="surface section-block standalone"><div class="section-heading"><h2>Biểu đồ môi trường</h2><label>Khoảng thời gian <select id="history-hours"><option value="1">1 giờ</option><option value="24">24 giờ</option></select></label></div><div id="environment-chart" aria-live="polite"><p class="empty">Chưa có dữ liệu.</p></div></section>
     </div>
 
     <div id="view-refill" class="view" hidden>
@@ -106,12 +107,12 @@
       </section>
       {% endif %}
       <div id="devices" class="device-grid"></div>
-      <section class="surface section-block standalone"><div class="section-heading"><h2>Điều khiển hộp đang chọn</h2><span id="control-device" class="tag neutral">PB01</span></div><div class="form-actions"><button class="button primary" onclick="sendCommand('REQUEST_STATUS')">Cập nhật trạng thái</button><button class="button secondary" onclick="sendCommand('CLEAR_ALERT')">Tắt âm & đèn nhắc</button></div><p id="command-result" class="inline-message" role="status" hidden></p><div id="commands" class="command-list"></div><nav id="commands-pagination" class="pagination" aria-label="Phân trang lệnh"></nav></section>
+      <section class="surface section-block standalone"><div class="section-heading"><h2>Điều khiển hộp đang chọn</h2><span id="control-device" class="tag neutral">PB01</span></div><div class="form-actions"><button class="button primary caregiver-control" onclick="sendCommand('REQUEST_STATUS')">Cập nhật trạng thái</button><button class="button secondary caregiver-control" onclick="sendCommand('CLEAR_ALERT')">Tắt âm & đèn nhắc</button></div><p id="command-result" class="inline-message" role="status" hidden></p><div id="commands" class="command-list"></div><nav id="commands-pagination" class="pagination" aria-label="Phân trang lệnh"></nav></section>
     </div>
 
   </main>
 
   <dialog id="settings-dialog"><div class="dialog-heading"><h2>Truy cập hệ thống</h2><button id="settings-close" class="icon-button" aria-label="Đóng">×</button></div><p id="session" class="section-note">Đang kiểm tra kết nối…</p><label>Khóa truy cập API<input id="access-token" type="password" autocomplete="off" placeholder="Nhập khóa cá nhân"></label><button id="login" class="button primary">Kết nối</button><p id="login-result" class="inline-message" role="status" aria-live="polite" hidden></p></dialog>
-  <script src="/static/dashboard.js?v=accounts-fleet-3"></script>
+  <script src="/static/dashboard.js?v=lab-integration-4"></script>
 </body>
 </html>

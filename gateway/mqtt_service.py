@@ -13,6 +13,7 @@ from .care_service import (
 )
 from .db import connect, utc_now
 from .mqtt_config import configure_mqtt
+from .rule_engine import classify_confirmed_environment
 
 LOGGER = logging.getLogger(__name__)
 EVENTS = {
@@ -48,6 +49,17 @@ def validate_message(topic, payload):
     if not isinstance(message, dict) or message.get("device_id") != parts[1]:
         raise ValueError("invalid device_id")
     kind = parts[2]
+    if "wifi_rssi" in message and (
+        type(message["wifi_rssi"]) is not int or not -127 <= message["wifi_rssi"] <= 0
+    ):
+        raise ValueError("invalid Wi-Fi RSSI")
+    if "ip_address" in message:
+        import ipaddress
+
+        try:
+            ipaddress.ip_address(message["ip_address"])
+        except (ValueError, TypeError) as exc:
+            raise ValueError("invalid IP address") from exc
     if "utc_synced" in message and not isinstance(message["utc_synced"], bool):
         raise ValueError("invalid UTC synchronization flag")
     if "refill_session_id" in message and (
@@ -245,6 +257,8 @@ def touch_device(db, message, state=None, status="online", storage=None):
         for key, column in (
             ("uptime_ms", "device_uptime_ms"),
             ("utc_synced", "utc_synced"),
+            ("wifi_rssi", "wifi_rssi"),
+            ("ip_address", "ip_address"),
             ("device_local_minute", "device_local_minute"),
             ("device_epoch_local", "device_epoch_local"),
             ("queue_depth", "queue_depth"),
@@ -401,6 +415,14 @@ def _store_message(topic, message, db):
         if inserted:
             update_alerts(db, message)
     elif kind == "environment":
+        if (
+            message.get("boot_id")
+            and db.execute(
+                "SELECT 1 FROM environment_readings WHERE device_id=? AND boot_id=? AND seq=?",
+                (device_id, message["boot_id"], message["seq"]),
+            ).fetchone()
+        ):
+            return
         touch_device(
             db,
             message,
@@ -430,6 +452,7 @@ def _store_message(topic, message, db):
                         "slot_id": 0,
                     },
                 )
+            classify_confirmed_environment(db, message)
         sampled = message.get("sampled_epoch_local", 0)
         sampled_at = (
             datetime.fromtimestamp(sampled, timezone.utc)

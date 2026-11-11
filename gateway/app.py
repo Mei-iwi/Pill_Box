@@ -10,6 +10,7 @@ from .auth import actor, configure_auth, scoped
 from .care_routes import alert_filter, close_refill_session, register_care_routes
 from .db import connect, init_db, rows, utc_now
 from .mqtt_service import publish_command, start_mqtt
+from .lab_routes import COMMAND_COLUMNS, register_lab_routes
 
 
 def availability(device):
@@ -115,7 +116,14 @@ def create_app(test_config=None):
         "DB_PATH",
         os.getenv("PILLBOX_DB", str(Path(__file__).parent / "data" / "pillbox.db")),
     )
-    app.config.update(DB_PATH=db_path, TEMPLATES_AUTO_RELOAD=True)
+    app.config.update(
+        DB_PATH=db_path,
+        TEMPLATES_AUTO_RELOAD=True,
+        MAX_CONTENT_LENGTH=8192,
+        HTTP_INGEST_ENABLED=(test_config or {}).get(
+            "HTTP_INGEST_ENABLED", os.getenv("PILLBOX_HTTP_INGEST") == "1"
+        ),
+    )
     app.config["MQTT_CLIENT"] = (test_config or {}).get("MQTT_CLIENT")
     app.config["REQUIRE_REFILL_SESSION"] = (test_config or {}).get(
         "REQUIRE_REFILL_SESSION", os.getenv("PILLBOX_DEPLOYMENT") == "care"
@@ -139,6 +147,7 @@ def create_app(test_config=None):
         )
 
     register_care_routes(app, page_data)
+    register_lab_routes(app)
 
     @app.get("/")
     def dashboard():
@@ -191,7 +200,7 @@ def create_app(test_config=None):
                     "created_at DESC,command_id DESC",
                     pages["commands"],
                     size,
-                    "command_id,command,status,created_at,ack_at",
+                    COMMAND_COLUMNS,
                 )
                 caregiver = g.identity is None or g.identity["role"] in (
                     "nurse",
@@ -417,7 +426,7 @@ def create_app(test_config=None):
                 (device_id,),
                 "created_at DESC,command_id DESC",
                 10,
-                "command_id,command,status,created_at,ack_at",
+                COMMAND_COLUMNS,
             )
 
     @app.post("/api/refill/verify")

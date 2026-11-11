@@ -11,6 +11,7 @@
 #include "communication/MqttClient.h"
 #include "domain/StorageMonitor.h"
 #include "domain/RefillWindow.h"
+#include "domain/TelemetryGate.h"
 
 class AppController {
 public:
@@ -38,6 +39,9 @@ private:
     bool alertSilenced_ = false;
     StorageMonitor storageMonitor_;
     RefillWindow refillWindow_;
+    TelemetryGate telemetryGate_;
+    uint32_t lastRtcSync_ = 0;
+    bool rtcSynchronized_ = false;
     bool incidentActive_ = false;
     uint8_t incidentSlot_ = 0;
     unsigned long incidentStarted_ = 0;

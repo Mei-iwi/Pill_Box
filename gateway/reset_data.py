@@ -12,6 +12,7 @@ from .db import connect, init_db, seed_defaults
 
 DATA_ROOT = (Path(__file__).parent / "data").resolve()
 TABLES = (
+    "alert_notifications",
     "alerts",
     "refill_sessions",
     "refill_verifications",

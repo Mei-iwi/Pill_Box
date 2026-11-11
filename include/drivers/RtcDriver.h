@@ -14,9 +14,11 @@ public:
     bool begin();
     ClockTime now() const;
     bool setDemoTime(uint8_t hour, uint8_t minute);
+    bool synchronizeUtc(uint32_t utc);
     bool isReady() const { return ready_; }
 private:
     bool ready_ = false;
+    bool present_ = false;
     mutable bool cached_ = false;
     mutable unsigned long lastRead_ = 0;
     mutable ClockTime cachedTime_{};
