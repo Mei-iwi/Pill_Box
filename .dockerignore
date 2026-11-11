@@ -1,0 +1,9 @@
+.git
+.pio
+.venv
+**/data
+**/__pycache__
+**/Secrets.h
+**/auth.local.json
+**/.env
+deploy/runtime

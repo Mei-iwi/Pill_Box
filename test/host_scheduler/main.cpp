@@ -3,6 +3,7 @@
 #include "app/Scheduler.h"
 #include "domain/EventBuffer.h"
 #include "domain/StorageMonitor.h"
+#include "domain/RefillWindow.h"
 
 static SchedulerEvent take(Scheduler& scheduler) {
     SchedulerEvent event{};
@@ -11,6 +12,18 @@ static SchedulerEvent take(Scheduler& scheduler) {
 }
 
 int main() {
+    RefillWindow refill;
+    const char* sid="0123456789abcdef0123456789abcdef";
+    assert(!refill.begin(1,sid,1704067500,0,100));
+    assert(!refill.begin(4,sid,1704067500,1704067200,100));
+    assert(refill.begin(1,sid,1704067500,1704067200,100));
+    assert(refill.allows(1,1704067201,1100));
+    assert(!refill.allows(2,1704067201,1100));
+    assert(refill.begin(1,sid,1704067501,1704067201,1100));
+    assert(!refill.allows(1,1704067499,300100)); // replay did not extend monotonic deadline
+    assert(!refill.allows(1,1704067500,2000));
+    assert(refill.end(sid));
+    assert(!refill.begin(1,sid,1704067500,1704067202,2100));
     StorageMonitor restartedMonitor;
     assert(restartedMonitor.sample(25,50,true,30,70,2,3)==StorageTransition::NONE);
     assert(restartedMonitor.sample(25,50,true,30,70,2,3)==StorageTransition::NONE);

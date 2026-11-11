@@ -43,6 +43,14 @@ def main():
                     "INSERT INTO schedules(schedule_id,device_id,slot_id,medication_code,hour,minute) VALUES (?,?,1,'MED001',?,0)",
                     (sid, did, hour),
                 )
+            db.execute(
+                "INSERT INTO slot_assignments(device_id,slot_id,patient_id,medication_code) VALUES (?,1,'P001','MED001')",
+                (did,),
+            )
+        clock_start = time.monotonic()
+
+        def uptime():
+            return 100000 + int((time.monotonic() - clock_start) * 1000)
 
         def scalar(sql, args=()):
             with connect(path) as db:
@@ -69,6 +77,7 @@ def main():
                 "occurred_at": f"2026-11-10T{at}:00+07:00",
                 "device_time_quality": "synthetic",
                 "delay_minutes": delay,
+                "uptime_ms": uptime(),
             }
             if name.startswith("TAKEN"):
                 payload["device_state"] = "IDLE"
@@ -92,7 +101,11 @@ def main():
                 "command_id": command["command_id"],
                 "command": command["command"],
                 "command_result": "APPLIED",
+                "boot_id": boot,
+                "uptime_ms": uptime(),
             }
+            if command.get("refill_session_id"):
+                ack["refill_session_id"] = command["refill_session_id"]
             if command["command"] == "UPDATE_SCHEDULE":
                 ack["schedules"] = [command]
             client.publish(f"pillbox/{did}/status", json.dumps(ack), qos=1)
@@ -112,8 +125,24 @@ def main():
             device.connect(host, port, 15)
             device.loop_start()
             wait_until(subscribed.is_set, "device subscription")
-            api = create_app({"DB_PATH": path, "MQTT_CLIENT": gateway}).test_client()
-            publish("heartbeat", {"status": "online", "state": "IDLE", "seq": 0})
+            api = create_app(
+                {
+                    "DB_PATH": path,
+                    "MQTT_CLIENT": gateway,
+                    "REQUIRE_REFILL_SESSION": True,
+                }
+            ).test_client()
+            publish(
+                "heartbeat",
+                {
+                    "status": "online",
+                    "state": "IDLE",
+                    "seq": 0,
+                    "boot_id": boot,
+                    "uptime_ms": uptime(),
+                    "utc_synced": True,
+                },
+            )
             wait_until(
                 lambda: bool(
                     api.get(f"/api/devices/{did}/status").get_json()["last_seen"]
@@ -232,7 +261,7 @@ def main():
             )
             refill = {
                 "actor_id": "NURSE01",
-                "box_id": "PB01",
+                "box_id": did,
                 "patient_id": "P001",
                 "slot_id": 1,
                 "medication_code": "MED001",
@@ -243,6 +272,33 @@ def main():
                 "actor_id": "NURSE01",
                 "verification_id": verified["verification_id"],
             }
+            authorized = api.post("/api/refill/authorize", json=confirmation)
+            assert authorized.status_code == 202, authorized.get_json()
+            session_id = authorized.get_json()["session_id"]
+            wait_until(
+                lambda: (
+                    scalar(
+                        "SELECT status FROM refill_sessions WHERE session_id=?",
+                        (session_id,),
+                    )
+                    == "ACTIVE"
+                ),
+                "refill BEGIN ACK",
+            )
+            opening = event("REFILL_OPEN", 40, "15:01", "REFILL")
+            opening.update(occurrence_id=None, refill_session_id=session_id)
+            publish("event", opening)
+            wait_until(
+                lambda: (
+                    scalar(
+                        "SELECT opened_count FROM refill_sessions WHERE session_id=?",
+                        (session_id,),
+                    )
+                    == 1
+                ),
+                "authorized refill open",
+            )
+            assert len(api.get(f"/api/devices/{did}/occurrences").get_json()) == 2
             assert (
                 api.post("/api/refill/confirm", json=confirmation).get_json()["result"]
                 == "CONFIRMED"
@@ -264,7 +320,11 @@ def main():
                         "broker": f"{host}:{port}",
                         "device": did,
                         "source": "synthetic MQTT; NOT ESP32/Wokwi",
-                        "events": 10,
+                        "events": scalar(
+                            "SELECT count(*) FROM medication_events WHERE device_id=?",
+                            (did,),
+                        ),
+                        "authorized_refill_open_without_dose": True,
                         "occurrences": 2,
                         "late_reconciliation": True,
                         "next_schedule_independent": True,

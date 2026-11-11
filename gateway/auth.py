@@ -30,6 +30,8 @@ def configure_auth(app, test_config):
             ):
                 raise ValueError("Invalid configured auth identity")
     app.config["AUTH_IDENTITIES"] = identities
+    if os.getenv("PILLBOX_DEPLOYMENT") == "care" and identities is None:
+        raise ValueError("care deployment requires PILLBOX_AUTH_FILE")
 
     @app.before_request
     def authorize():
@@ -58,7 +60,11 @@ def configure_auth(app, test_config):
         if body.get("command") == "UPDATE_SCHEDULE" and role != "admin":
             return jsonify(error="admin role required"), 403
         device = (request.view_args or {}).get("device_id") or body.get("box_id")
-        if request.path == "/api/refill/confirm" and body.get("verification_id"):
+        if request.path in (
+            "/api/refill/confirm",
+            "/api/refill/authorize",
+            "/api/refill/end",
+        ) and body.get("verification_id"):
             if not isinstance(body["verification_id"], str):
                 return jsonify(error="invalid verification ID"), 400
             with connect(app.config["DB_PATH"]) as db:

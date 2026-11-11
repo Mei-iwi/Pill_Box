@@ -2,6 +2,7 @@
 #include "config/AppConfig.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <time.h>
 
 AppController::AppController() : mqtt_(wifi_) {}
 
@@ -64,20 +65,24 @@ void AppController::update() {
 
     for (uint8_t slot = 1; slot <= 3; ++slot) {
         if (buttons_.wasPressed(slot)) {
+            if (refillWindow_.allows(slot,static_cast<uint32_t>(time(nullptr)),millis())) {
+                SchedulerEvent event{EventType::REFILL_OPEN,slot,"REFILL",now.minuteOfDay,now.minuteOfDay,0,now.dayKey,now.epoch,now.epoch};
+                mqtt_.publishEvent(event,++sequence_,state_,refillWindow_.id());
+                continue; // Refill access must never complete a medication occurrence.
+            }
             scheduler_.recordSlotOpen(slot, now.dayKey, now.minuteOfDay, now.epoch);
             while (true) { SchedulerEvent event; if (!scheduler_.takeEvent(event)) break; handleEvent(event); }
         }
     }
 
-    if (scheduler_.hasActiveReminder()) {
-        for (uint8_t slot=1;slot<=3;++slot) leds_.setSlot(slot,scheduler_.slotReminding(slot) && !alertSilenced_);
-        if (!alertSilenced_ && !buzzer_.isActive()) buzzer_.start();
-        state_ = scheduler_.hasOverdueReminder() ? "ALERT" : "REMINDING";
-    } else if (strcmp(state_, "REMINDING") == 0 || strcmp(state_, "ALERT") == 0) {
-        leds_.allOff();
-        buzzer_.stop();
-        state_ = "IDLE";
-    }
+    if (incidentActive_ && millis()-incidentStarted_>=10000) incidentActive_=false;
+    const bool needsAttention=scheduler_.hasActiveReminder() || incidentActive_;
+    for (uint8_t slot=1;slot<=3;++slot) leds_.setSlot(slot,!alertSilenced_ &&
+        (scheduler_.slotReminding(slot) || (incidentActive_ && incidentSlot_==slot)));
+    if (needsAttention && !alertSilenced_) { if (!buzzer_.isActive()) buzzer_.start(); }
+    else if (buzzer_.isActive()) buzzer_.stop();
+    state_=(incidentActive_ || scheduler_.hasOverdueReminder()) ? "ALERT" :
+        scheduler_.hasActiveReminder() ? "REMINDING" : "IDLE";
 
     const bool connected=mqtt_.connected();
     const bool reconnected=connected && !wasConnected_;
@@ -115,7 +120,10 @@ void AppController::handleEvent(const SchedulerEvent& event) {
         alertSilenced_ = false; leds_.setSlot(event.slotId, false); buzzer_.stop(); state_ = "IDLE";
     }
     if (event.type == EventType::MISSED) state_ = "ALERT";
-    state_=scheduler_.hasActiveReminder() ? (scheduler_.hasOverdueReminder() ? "ALERT" : "REMINDING") : "IDLE";
+    if (event.type==EventType::WRONG_SLOT || event.type==EventType::UNSCHEDULED_OPEN || event.type==EventType::AMBIGUOUS_OPEN) {
+        incidentActive_=true; incidentSlot_=event.slotId; incidentStarted_=millis(); alertSilenced_=false;
+    }
+    state_=(incidentActive_ || scheduler_.hasOverdueReminder()) ? "ALERT" : scheduler_.hasActiveReminder() ? "REMINDING" : "IDLE";
     statusDirty_=true;
     mqtt_.publishEvent(event, ++sequence_,state_);
 }
@@ -129,6 +137,14 @@ void AppController::handleCommandPayload(const char* payload) {
     if (deserializeJson(doc, payload)) return;
     const char* command = doc["command"] | "";
     const char* commandId = doc["command_id"] | "";
+    if (strcmp(command,"BEGIN_REFILL")==0 || strcmp(command,"END_REFILL")==0) {
+        const char* session=doc["refill_session_id"] | "";
+        bool accepted=false;
+        if (!strcmp(command,"END_REFILL")) accepted=refillWindow_.end(session);
+        else if (doc["slot_id"].is<uint8_t>() && doc["expires_epoch_utc"].is<uint32_t>())
+            accepted=refillWindow_.begin(doc["slot_id"].as<uint8_t>(),session,doc["expires_epoch_utc"].as<uint32_t>(),static_cast<uint32_t>(time(nullptr)),millis());
+        mqtt_.publishCommandResult(commandId,command,accepted,nullptr,0,session); return;
+    }
     if (strcmp(command, "CLEAR_ALERT") == 0) {
         alertSilenced_ = true; buzzer_.stop(); leds_.allOff(); mqtt_.publishStatus(state_, ++sequence_);
         mqtt_.publishCommandResult(commandId,command,true,nullptr,0); return;

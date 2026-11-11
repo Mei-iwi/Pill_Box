@@ -12,7 +12,13 @@ bool SettingsStore::loadSchedules(StoredSchedules& value) {
 bool SettingsStore::saveSchedules(const StoredSchedules& value) { return preferences.putBytes("schedules_v1", &value, sizeof(value)) == sizeof(value); }
 bool SettingsStore::loadLedger(void* ledger, size_t size) { return preferences.isKey("ledger_v1") && preferences.getBytesLength("ledger_v1") == size && preferences.getBytes("ledger_v1", ledger, size) == size; }
 bool SettingsStore::saveLedger(const void* ledger, size_t size) { return preferences.putBytes("ledger_v1", ledger, size) == size; }
-bool SettingsStore::begin() { return preferences.begin("pillbox", false); }
+bool SettingsStore::begin() {
+    if (!strcmp(AppConfig::DEVICE_ID,"PB01")) return preferences.begin("pillbox",false);
+    uint32_t hash=2166136261UL;
+    for (const char* p=AppConfig::DEVICE_ID;*p;++p) hash=(hash^static_cast<uint8_t>(*p))*16777619UL;
+    char name[16]; snprintf(name,sizeof(name),"pb-%08lx",static_cast<unsigned long>(hash));
+    return preferences.begin(name,false);
+}
 void SettingsStore::resetToDefaults(StoredSettings& settings) { settings = {1, AppConfig::DEMO_MAX_TEMPERATURE_C, AppConfig::DEMO_MAX_HUMIDITY_PERCENT}; }
 bool SettingsStore::load(StoredSettings& settings) {
     resetToDefaults(settings);

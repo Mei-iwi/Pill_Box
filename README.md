@@ -336,8 +336,9 @@ Lịch tiếp theo trên web dùng phút hiện tại do thiết bị báo, nên
 1. Chọn **PB01**, vào **Nạp thuốc**.
 2. Nhập mã người chăm sóc, hồ sơ **P001**, ngăn **1**.
 3. Nhập/quét **MED001** ở ô mã trên bao bì.
-4. **Xác minh mã**; khi phù hợp, nút Xác nhận nạp được mở.
-5. **Xác nhận nạp** để hoàn tất và ghi lịch sử.
+4. **Xác minh mã**, sau đó **Bắt đầu nạp**. Hộp cần trực tuyến và đồng bộ UTC; chờ ACK cho phép nạp.
+5. Mở đúng ngăn trên simulator. Web ghi **Mở ngăn nạp thuốc**; không hoàn tất lịch lấy thuốc.
+6. **Xác nhận nạp** để ghi lịch sử và yêu cầu kết thúc phiên. **Kết thúc phiên** dùng khi hủy. Phiên tự hết hạn tối đa 5 phút, độc lập lệnh TIME.
 
 MED002 ở ngăn 1 PB01 bị từ chối vì sai mã. PB02 nhưng dùng P001 bị từ chối vì sai hồ sơ/hộp. Token có hạn 5 phút, dùng một lần; đổi form, hết hạn hoặc thay assignment thì phải xác minh lại.
 
@@ -373,7 +374,7 @@ Nếu đã có Secrets.h, chỉnh file hiện có, không sao chép đè. Tự �
 #define PILLBOX_MQTT_PASSWORD ""
 ~~~
 
-Firmware và Gateway phải cùng broker. Theo hướng dẫn này, giữ credential trống và chỉ dùng dữ liệu ẩn danh. Gateway hiện chưa cấu hình tài khoản/TLS MQTT qua biến môi trường.
+Firmware và Gateway phải cùng broker. Profile mô phỏng công khai chỉ dùng dữ liệu ẩn danh. Với broker riêng, Gateway nhận MQTT_USER, MQTT_PASSWORD, MQTT_TLS=1 và MQTT_CA_FILE; firmware dùng cấu hình CA/tài khoản trong Secrets.h. Xem [hướng dẫn profile care](deploy/README.md) để cấu hình TLS, ACL và HTTPS.
 
 ### 9.2. Đấu nối và đặt RTC
 
@@ -538,7 +539,7 @@ unset PILLBOX_AUTH_FILE
 ./.venv/Scripts/python.exe -m unittest discover -s gateway/tests -t . -v
 ~~~
 
-Linux/macOS dùng **./.venv/bin/python**. Hiện có 41 test, sử dụng DB tạm, bao gồm snapshot realtime, dữ liệu đến trễ, trạng thái phiên khởi động mới và phân quyền.
+Linux/macOS dùng **./.venv/bin/python**. Hiện có 61 test, sử dụng DB tạm, bao gồm realtime, phiên nạp có ACK, phân quyền, cảnh báo và TLS. Ba ca TLS socket cần OpenSSL; nếu chưa cài sẽ hiện SKIP và không được tính là đã kiểm chứng TLS.
 
 ### MQTT hai chiều qua broker thật
 
@@ -667,6 +668,17 @@ Pill_Box/
 - Ledger NVS hạn chế completion lặp, không phải durable event outbox.
 - Chưa hỗ trợ lấy trễ xuyên ngày địa phương; firmware PB01 có 4 lịch cấu hình sẵn.
 - HX711 mới có interface, chưa có driver đọc/cân/hiệu chuẩn. Deep Sleep và thời lượng pin chưa được kiểm chứng.
-- HTTP/MQTT 1883 dùng cho môi trường thử nghiệm cục bộ; chưa có TLS/ACL production.
+- HTTP/MQTT 1883 giữ cho mô phỏng. Profile care bổ sung TLS/ACL/HTTPS tại [deploy/README.md](deploy/README.md); cần nghiệm thu mạng và thiết bị trước sử dụng thực tế.
 
 Ảnh giao diện đã tải sẵn, không cần tải lại khi chạy: [Anna Shvets — Pexels](https://www.pexels.com/photo/photo-medication-pills-on-white-plastic-container-3683074/) và [Polina Tankilevitch — Pexels](https://www.pexels.com/photo/photo-of-pills-on-container-3873162/), theo [Pexels License](https://www.pexels.com/license/). Ảnh minh họa không nhận diện viên thuốc trong từng ngăn.
+
+## 14. Vận hành theo định hướng mẫu
+
+[Hướng dẫn triển khai và đối chiếu sáu phần của mẫu](deploy/README.md) chuyển bài toán logistics sang hộp thuốc tại cơ sở chăm sóc: thiết bị, broker/Gateway, mạng và bảo mật, lắp đặt, lịch chăm sóc và kịch bản kiểm thử.
+
+- Firmware dùng ID hộp cấu hình được, topic và LWT theo ID, lịch có prefix riêng cho hộp mới. Đăng ký bằng **python -m gateway.provision**, không tự sinh lịch sử giả.
+- Nạp thuốc có cửa sổ được thiết bị ACK, theo ngăn/người chăm sóc/phiên khởi động. **REFILL_OPEN** tách khỏi lấy thuốc; mở sai/ngoài lịch cảnh báo tại hộp và trên web.
+- Danh sách cảnh báo tập trung trong phạm vi tài khoản, có phân trang và ghi người tiếp nhận. Lấy trễ hợp lệ/môi trường hồi phục tự giải quyết cảnh báo tương ứng.
+- Có cấu hình Mosquitto riêng, TLS, ACL từng hộp, Gateway Waitress và HTTPS. **deploy/prepare.ps1** tạo khóa riêng trên máy, không có mật khẩu/license được commit.
+
+Wokwi mặc định vẫn dùng broker thử nghiệm. Profile **care** yêu cầu API auth, MQTT TLS/tài khoản và hộp đã đăng ký; API xác nhận nạp yêu cầu đã ghi nhận mở ngăn trong phiên. Profile local giữ API xác minh/xác nhận cũ để tương thích, nhưng giao diện mới luôn sử dụng phiên nạp. Giữ dữ liệu người bệnh thật ngoài broker công khai. Cấu hình Docker/VLAN không đồng nghĩa đã thử board thật hoặc đã áp dụng lên router.

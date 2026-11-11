@@ -24,19 +24,23 @@ const labels = {
   REQUEST_STATUS: 'Đọc trạng thái', CLEAR_ALERT: 'Tắt âm & đèn nhắc',
   UPDATE_SCHEDULE: 'Cập nhật lịch'
 };
+Object.assign(labels, {REFILL_OPEN:'Mở ngăn nạp thuốc', BEGIN_REFILL:'Bắt đầu phiên nạp', END_REFILL:'Kết thúc phiên nạp',
+  REFILL_OPEN_REQUIRED:'Chưa ghi nhận mở đúng ngăn trong phiên nạp.', VERIFICATION_REQUIRED:'Vui lòng xác minh mã trước.',
+  OPEN:'Cần xử lý', ACKNOWLEDGED:'Đã tiếp nhận', RESOLVED:'Đã xử lý'});
 const roleLabels = { family: 'Gia đình', nurse: 'Người chăm sóc', admin: 'Quản trị' };
 const views = ['overview', 'schedules', 'history', 'refill', 'devices'];
 let token = '', verification = null, verificationContext = '', expiresAt = 0;
 let loading = false, refreshQueued = false, caregiver = true, authPrompted = false;
 let currentView = 'overview', knownDevices = [], currentSlots = [], lastCommandId = null;
 let bootstrapReady = false, accessBlocked = false;
+let refillSessionId = null;
 const renderCache = new Map();
 function renderChanged(name, value, render) {
   const fingerprint = JSON.stringify(value);
   if (renderCache.get(name) === fingerprint) return;
   render(); renderCache.set(name, fingerprint);
 }
-const listPages = { events: 1, occurrences: 1, audit: 1, commands: 1 };
+const listPages = { events: 1, occurrences: 1, audit: 1, commands: 1, alerts: 1 };
 const pageSize = 8;
 
 function selected() { return $('#device').value; }
@@ -97,6 +101,9 @@ async function api(url, body) {
         'device not assigned to identity': 'Bạn chưa được phân quyền cho hộp này.',
         'caregiver role required': 'Chức năng dành cho người chăm sóc.',
         'MQTT broker unavailable': 'Chưa kết nối được thiết bị. Vui lòng thử lại.',
+        'device must be online before refill': 'Hộp cần trực tuyến trước khi bắt đầu nạp.',
+        'device must synchronize UTC before refill': 'Hộp chưa đồng bộ giờ UTC. Giữ simulator chạy và thử lại sau heartbeat.',
+        'refill session already exists': 'Đã có phiên nạp. Kết thúc phiên hoặc chờ hết hạn rồi xác minh lại.',
         'valid verification required before confirm': 'Vui lòng xác minh lại trước khi nạp.'
       }[data.error]) || data.error || 'Không thể tải dữ liệu.');
       error.status = response.status;
@@ -108,10 +115,18 @@ async function api(url, body) {
     throw error;
   } finally { clearTimeout(timeout); }
 }
-function resetVerification(edited = false) {
+function resetVerification(edited = false, cancelSession = true) {
   const hadVerification = Boolean(verification);
+  if (cancelSession && refillSessionId && verification) {
+    const oldActor = verificationContext ? JSON.parse(verificationContext).actor_id : '';
+    api('/api/refill/end', {verification_id:verification, actor_id:oldActor}).catch(() => {});
+  }
   verification = null;
+  refillSessionId = null;
   $('#confirm').disabled = true;
+  $('#authorize-refill').disabled = true;
+  $('#end-refill').disabled = true;
+  message('#refill-session','');
   if (edited && hadVerification) message('#refill-result', 'Thông tin đã thay đổi. Vui lòng xác minh lại.');
 }
 function refillBody() {
@@ -125,12 +140,38 @@ function renderRefillContext() {
   const assignment = currentSlots.find(item => item.slot_id === slot);
   $('#refill-context').textContent = 'Hộp ' + selected() + ' · Ngăn ' + slot + ' · ' + (assignment ? (assignment.medication_name || assignment.medication_code) + ' (' + assignment.medication_code + ')' : 'Chưa gán');
 }
+function renderRefillSession(session) {
+  if (!verification || session?.verification_id !== verification) return;
+  refillSessionId = session.session_id;
+  const fresh = Date.parse(session.expires_at)>Date.now();
+  const awaitingClose = fresh && session.status==='CLOSED' && session.end_uptime_ms==null;
+  $('#authorize-refill').disabled = true;
+  $('#end-refill').disabled = !fresh || (!['PENDING','ACTIVE'].includes(session.status) && !awaitingClose);
+  $('#confirm').disabled = !fresh || !['ACTIVE','CLOSED'].includes(session.status) || session.opened_count<1;
+  const text = !fresh ? 'Phiên nạp đã hết hạn.' : session.status==='PENDING' ? 'Đang chờ thiết bị cho phép nạp…' :
+    session.status==='ACTIVE' ? 'Được phép nạp ngăn '+session.slot_id+(session.opened_count ? ' · Đã ghi nhận mở ngăn.' : ' · Hãy mở đúng ngăn.') :
+    awaitingClose ? 'Chờ thiết bị kết thúc phiên; có thể gửi lại yêu cầu hoặc chờ tự hết hạn.' : session.status==='CLOSED' ? 'Thiết bị đã kết thúc phiên nạp.' : 'Thiết bị từ chối phiên nạp. Kiểm tra đồng bộ giờ UTC và xác minh lại.';
+  message('#refill-session',text);
+}
+function renderCareAlerts(result) {
+  const entries=result?.items || [];
+  $('#alerts-panel').hidden=!entries.length;
+  $('#care-alerts').innerHTML=entries.map(item=>'<div class="care-alert-row '+esc(item.severity)+'"><div><strong>'+esc(item.device_id)+' · '+esc(labels[item.kind] || item.kind)+
+    '</strong><small>'+(item.slot_id ? 'Ngăn '+item.slot_id+' · ' : '')+esc(dateTime(item.created_at))+(item.acknowledged_by ? ' · '+esc(item.acknowledged_by) : '')+'</small></div>'+
+    (caregiver && item.status==='OPEN' ? '<button class="button secondary" onclick="acknowledgeAlert('+item.alert_id+',\''+
+    (['WRONG_SLOT','UNSCHEDULED_OPEN','AMBIGUOUS_OPEN'].includes(item.kind) ? 'resolve' : 'acknowledge')+'\')">'+
+    (['WRONG_SLOT','UNSCHEDULED_OPEN','AMBIGUOUS_OPEN'].includes(item.kind) ? 'Đã kiểm tra' : 'Tiếp nhận')+'</button>' : badge(item.status))+'</div>').join('');
+}
+async function acknowledgeAlert(id,action) {
+  try { await api('/api/alerts/'+id+'/ack',{actor_id:$('#actor').value.trim(),action});load(); }
+  catch(error) {message('#error',error.message);}
+}
 function renderDevices(devices, device) {
   $('#devices').innerHTML = devices.map(item => '<article class="surface device-card"><div class="section-heading"><h2>' +
     esc(item.device_id) + '</h2><span class="tag ' + (item.status === 'online' ? 'success' : 'neutral') + '">' +
     (item.status === 'online' ? 'Đã kết nối' : 'Ngoại tuyến') + '</span></div><div class="device-info"><div>Người dùng<strong>' +
     esc(item.patient_name || item.patient_id) + '</strong></div><div>Trạng thái<strong>' + esc(labels[item.state] || 'Chưa có dữ liệu') +
-    '</strong></div><div>Cập nhật lần cuối<strong>' + esc(dateTime(item.last_seen)) +
+    '</strong></div><div>Giờ UTC<strong>' + (item.utc_synced ? 'Đã đồng bộ' : 'Đang chờ đồng bộ') + '</strong></div><div>Cập nhật lần cuối<strong>' + esc(dateTime(item.last_seen)) +
     '</strong></div><div>Hàng đợi<strong>' + esc(item.queue_depth || 0) + ' chờ · ' + esc(item.queue_dropped || 0) + ' bỏ do đầy</strong></div></div></article>').join('');
   const online = device?.status === 'online';
   $('#connection').classList.toggle('online', online);
@@ -256,6 +297,7 @@ async function load() {
       bootstrapReady = true;
     }
     const query = new URLSearchParams({ page_size: String(pageSize) });
+    query.set('actor_id',$('#actor').value.trim());
     for (const [name, page] of Object.entries(listPages)) query.set(name + '_page', String(page));
     const snapshot = await api('/api/devices/' + encodeURIComponent(device) + '/live?' + query);
     if (device !== selected()) { refreshQueued = true; return; }
@@ -287,6 +329,9 @@ async function load() {
     renderChanged('commands', [commands, lastCommandId], () => renderCommands(commands.items));
     renderChanged('commands-page', commands, () => renderPagination('commands', commands));
     renderRefillContext();
+    renderRefillSession(snapshot.refill_session);
+    renderChanged('care-alerts',[snapshot.alerts,caregiver],()=>renderCareAlerts(snapshot.alerts));
+    if (snapshot.alerts) renderChanged('alerts-page',snapshot.alerts,()=>renderPagination('alerts',snapshot.alerts));
     message('#error', '');
   } catch (error) {
     message('#error', error.message);
@@ -324,11 +369,29 @@ async function verifyRefill(event) {
       verification = response.verification_id;
       verificationContext = JSON.stringify(body);
       expiresAt = Date.parse(response.expires_at);
-      $('#confirm').disabled = false;
-      message('#refill-result', 'Mã thuốc phù hợp. Xác nhận nạp để hoàn tất.', 'success');
+      $('#authorize-refill').disabled = false;
+      message('#refill-result', 'Mã thuốc phù hợp. Bắt đầu nạp để cho phép mở ngăn.', 'success');
     } else message('#refill-result', labels[response.result] || response.result, 'danger');
   } catch (error) { message('#refill-result', error.message, 'danger'); }
   load();
+}
+async function authorizeRefill() {
+  if (!verification || Date.now()>=expiresAt) {resetVerification();return;}
+  $('#authorize-refill').disabled=true;
+  try {
+    const result=await api('/api/refill/authorize',{verification_id:verification,actor_id:$('#actor').value.trim()});
+    refillSessionId=result.session_id;
+    $('#end-refill').disabled=false;
+    message('#refill-session','Đang chờ thiết bị cho phép nạp…');
+    load();
+  } catch(error) {$('#authorize-refill').disabled=false;message('#refill-result',error.message,'danger');}
+}
+async function endRefill() {
+  if (!verification) return;
+  try {
+    await api('/api/refill/end',{verification_id:verification,actor_id:$('#actor').value.trim()});
+    message('#refill-session','Đã yêu cầu kết thúc phiên nạp.');load();
+  } catch(error) {message('#refill-result',error.message,'danger');}
 }
 async function confirmRefill() {
   if (!verification || verificationContext !== JSON.stringify(refillBody()) || Date.now() >= expiresAt) {
@@ -337,10 +400,12 @@ async function confirmRefill() {
     return;
   }
   const id = verification;
-  resetVerification();
+  resetVerification(false,false);
   try {
     const response = await api('/api/refill/confirm', { actor_id: $('#actor').value, verification_id: id });
     message('#refill-result', labels[response.result] || response.result, response.result === 'CONFIRMED' ? 'success' : 'danger');
+    if (response.session_close) message('#refill-session',response.session_close.status==='PUBLISH_FAILED' ?
+      'Chưa gửi được lệnh kết thúc tới hộp. Phiên thiết bị sẽ tự hết hạn.' : 'Đã yêu cầu thiết bị kết thúc phiên. Theo dõi ACK ở mục Thiết bị.');
   } catch (error) { message('#refill-result', error.message, 'danger'); }
   load();
 }

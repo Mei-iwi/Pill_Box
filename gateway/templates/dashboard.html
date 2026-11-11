@@ -28,6 +28,10 @@
 
   <main class="workspace">
     <p id="error" class="notice error-notice" role="alert" hidden></p>
+    <section id="alerts-panel" class="surface section-block standalone care-alerts" hidden aria-live="polite">
+      <div class="section-heading"><h2>Cảnh báo cần xử lý</h2></div><div id="care-alerts"></div>
+      <nav id="alerts-pagination" class="pagination" aria-label="Phân trang cảnh báo"></nav>
+    </section>
     <div id="view-overview" class="view">
       <div class="surface overview-surface">
         <section class="hero" aria-labelledby="hero-title">
@@ -74,9 +78,10 @@
         <form id="refill-form" onsubmit="verifyRefill(event)">
           <div class="form-grid"><label id="actor-field">Mã người chăm sóc<input id="actor" value="NURSE01" required autocomplete="off"></label><label>Mã người dùng<input id="patient" value="P001" required autocomplete="off"></label><label>Ngăn thuốc<select id="slot"><option value="1">Ngăn 1</option><option value="2">Ngăn 2</option><option value="3">Ngăn 3</option></select></label><label>Mã trên bao bì<input id="medication" placeholder="Nhập hoặc quét mã" required autocomplete="off"></label></div>
           <div id="refill-context" class="refill-context">Hộp PB01 · Ngăn 1 · MED001</div>
-          <div class="form-actions"><button class="button primary" type="submit">Xác minh mã</button><button class="button secondary" id="confirm" type="button" onclick="confirmRefill()" disabled>Xác nhận nạp</button></div>
+          <div class="form-actions"><button class="button primary" type="submit">Xác minh mã</button><button class="button secondary" id="authorize-refill" type="button" onclick="authorizeRefill()" disabled>Bắt đầu nạp</button><button class="button secondary" id="confirm" type="button" onclick="confirmRefill()" disabled>Xác nhận nạp</button><button class="text-button" id="end-refill" type="button" onclick="endRefill()" disabled>Kết thúc phiên</button></div>
         </form>
         <p id="refill-result" class="inline-message" role="status" hidden></p>
+        <p id="refill-session" class="inline-message" role="status" hidden></p>
       </section>
       <section class="surface section-block standalone"><div class="section-heading"><h2>Lịch sử nạp thuốc</h2></div><div id="audit"></div><nav id="audit-pagination" class="pagination" aria-label="Phân trang nạp thuốc"></nav></section>
     </div>

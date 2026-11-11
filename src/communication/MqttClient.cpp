@@ -7,25 +7,22 @@
 #include <ArduinoJson.h>
 #include <esp_system.h>
 #include <RTClib.h>
+#include <time.h>
 
-#if defined(PILLBOX_SIMULATION)
-#undef PILLBOX_MQTT_USER
-#undef PILLBOX_MQTT_PASSWORD
-#define PILLBOX_MQTT_USER ""
-#define PILLBOX_MQTT_PASSWORD ""
-#elif __has_include("config/Secrets.h")
-#include "config/Secrets.h"
+#if PILLBOX_MQTT_TLS
+#include <WiFiClientSecure.h>
+static WiFiClientSecure netClient;
 #else
-#define PILLBOX_MQTT_USER ""
-#define PILLBOX_MQTT_PASSWORD ""
-#endif
-
 static WiFiClient netClient;
+#endif
 static PubSubClient mqtt(netClient);
 static MqttClient* currentClient = nullptr;
+static char statusTopic[80];
+static char commandTopic[80];
 
 static void mqttCallback(char* topic, byte* payload, unsigned int length) {
-    if (!currentClient || String(topic) != "pillbox/PB01/command") return;
+    if (!currentClient || strcmp(topic,commandTopic)) return;
+    if (length>=320) return; // Reject, rather than execute a truncated command.
     char message[320] = {0};
     const unsigned int copyLength = length < sizeof(message) - 1 ? length : sizeof(message) - 1;
     memcpy(message, payload, copyLength);
@@ -35,8 +32,15 @@ static void mqttCallback(char* topic, byte* payload, unsigned int length) {
 MqttClient::MqttClient(WifiManager& wifi) : wifi_(wifi) {}
 
 void MqttClient::begin() {
+    snprintf(statusTopic,sizeof(statusTopic),"pillbox/%s/status",AppConfig::DEVICE_ID);
+    snprintf(commandTopic,sizeof(commandTopic),"pillbox/%s/command",AppConfig::DEVICE_ID);
+#if PILLBOX_MQTT_TLS
+    netClient.setCACert(PILLBOX_MQTT_CA_CERT);
+    netClient.setHandshakeTimeout(8);
+#endif
+    configTime(0,0,AppConfig::NTP_SERVER);
     snprintf(bootId_, sizeof(bootId_), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
-    mqtt.setBufferSize(1024);
+    mqtt.setBufferSize(1536);
     mqtt.setSocketTimeout(1);
     mqtt.setKeepAlive(AppConfig::MQTT_KEEPALIVE_SECONDS);
     mqtt.setServer(AppConfig::MQTT_HOST, AppConfig::MQTT_PORT);
@@ -63,20 +67,25 @@ void MqttClient::networkTask(void* context) {
 
 void MqttClient::networkUpdate() {
     if (!wifi_.connected()) { networkConnected_=false; return; }
+#if PILLBOX_MQTT_TLS
+    // Certificate validity needs real UTC; RTC demo time must not bypass TLS checks.
+    if (time(nullptr)<1704067200) { networkConnected_=false; return; }
+#endif
     if (!mqtt.connected()) {
         networkConnected_=false;
         if (millis() - lastAttempt_ < AppConfig::MQTT_RETRY_MS) return;
         lastAttempt_ = millis();
+        char will[140]; snprintf(will,sizeof(will),"{\"device_id\":\"%s\",\"status\":\"offline\"}",AppConfig::DEVICE_ID);
         const bool connected = strlen(PILLBOX_MQTT_USER) > 0
-            ? mqtt.connect(AppConfig::DEVICE_ID, PILLBOX_MQTT_USER, PILLBOX_MQTT_PASSWORD, "pillbox/PB01/status", 1, true, "{\"device_id\":\"PB01\",\"status\":\"offline\"}")
-            : mqtt.connect(AppConfig::DEVICE_ID, "pillbox/PB01/status", 1, true, "{\"device_id\":\"PB01\",\"status\":\"offline\"}");
+            ? mqtt.connect(AppConfig::DEVICE_ID, PILLBOX_MQTT_USER, PILLBOX_MQTT_PASSWORD, statusTopic, 1, true, will)
+            : mqtt.connect(AppConfig::DEVICE_ID, statusTopic, 1, true, will);
         networkConnected_=connected;
         if (connected) {
-            mqtt.subscribe("pillbox/PB01/command");
+            mqtt.subscribe(commandTopic);
             JsonDocument hello; hello["device_id"]=AppConfig::DEVICE_ID; hello["status"]="online";
             hello["boot_id"]=bootId_; hello["uptime_ms"]=millis();
             char payload[220]; serializeJson(hello,payload,sizeof(payload));
-            mqtt.publish("pillbox/PB01/status",payload,true);
+            mqtt.publish(statusTopic,payload,true);
             flushQueue();
         }
         return;
@@ -104,6 +113,11 @@ void MqttClient::publishOrQueue(const char* topic, const char* payload, bool dur
     xSemaphoreGive(mutex_);
 }
 
+void MqttClient::publishKind(const char* kind, const char* payload, bool durable, bool priority) {
+    char topic[80]; snprintf(topic,sizeof(topic),"pillbox/%s/%s",AppConfig::DEVICE_ID,kind);
+    publishOrQueue(topic,payload,durable,priority);
+}
+
 void MqttClient::flushQueue() {
     if (!mqtt.connected()) return;
     xSemaphoreTake(mutex_,portMAX_DELAY);
@@ -117,7 +131,7 @@ void MqttClient::flushQueue() {
     if (hasInFlight_ && mqtt.publish(inFlight_.topic,inFlight_.payload)) hasInFlight_=false;
 }
 
-void MqttClient::publishEvent(const SchedulerEvent& event, uint32_t sequence, const char* state) {
+void MqttClient::publishEvent(const SchedulerEvent& event, uint32_t sequence, const char* state, const char* refillSession) {
     JsonDocument doc;
     doc["device_id"] = AppConfig::DEVICE_ID;
     doc["event"] = eventTypeName(event.type);
@@ -130,11 +144,12 @@ void MqttClient::publishEvent(const SchedulerEvent& event, uint32_t sequence, co
     doc["schema_version"] = 2;
     doc["boot_id"] = bootId_;
     doc["uptime_ms"] = millis();
+    if (refillSession) doc["refill_session_id"]=refillSession;
     if (state) { doc["device_state"]=state; doc["device_local_minute"]=event.occurredMinute; doc["device_epoch_local"]=event.occurredEpoch; }
     char eventId[80]; snprintf(eventId, sizeof(eventId), "%s:%s:%lu", AppConfig::DEVICE_ID, bootId_, (unsigned long)sequence);
     doc["event_id"] = eventId;
     char occurrenceId[80]; snprintf(occurrenceId, sizeof(occurrenceId), "%s:%s:%lu", AppConfig::DEVICE_ID, event.scheduleId, (unsigned long)event.occurrenceDay);
-    if (event.slotId > 0 && strcmp(event.scheduleId, "NONE") && strcmp(event.scheduleId, "AMBIGUOUS")) doc["occurrence_id"] = occurrenceId;
+    if (event.slotId > 0 && strcmp(event.scheduleId, "NONE") && strcmp(event.scheduleId, "AMBIGUOUS") && strcmp(event.scheduleId,"REFILL")) doc["occurrence_id"] = occurrenceId;
     else doc["occurrence_id"] = nullptr;
     // RTC stores local civil time; represent it explicitly with the demo +07:00 offset.
     char scheduledAt[32], occurredAt[32];
@@ -145,8 +160,8 @@ void MqttClient::publishEvent(const SchedulerEvent& event, uint32_t sequence, co
         doc["scheduled_at"] = scheduledAt; doc["occurred_at"] = occurredAt;
         doc["device_time_quality"] = "rtc";
     } else { doc["scheduled_at"] = nullptr; doc["occurred_at"] = nullptr; doc["device_time_quality"] = "unsynchronized"; }
-    char payload[768]; serializeJson(doc, payload, sizeof(payload));
-    publishOrQueue("pillbox/PB01/event", payload, true);
+    char payload[1024]; serializeJson(doc, payload, sizeof(payload));
+    publishKind("event", payload, true);
 }
 
 void MqttClient::publishEnvironment(float temperatureC, float humidityPercent, bool sensorOk, uint32_t sampledEpoch, uint32_t sequence, const char* storageStatus) {
@@ -159,7 +174,7 @@ void MqttClient::publishEnvironment(float temperatureC, float humidityPercent, b
     doc["sampled_epoch_local"] = sampledEpoch;
     doc["boot_id"]=bootId_; doc["uptime_ms"]=millis(); doc["storage_status"]=storageStatus;
     char payload[384]; serializeJson(doc, payload, sizeof(payload));
-    publishOrQueue("pillbox/PB01/environment", payload);
+    publishKind("environment", payload);
 }
 
 void MqttClient::publishHeartbeat(const char* state, uint32_t sequence, uint16_t minute, uint32_t epoch) {
@@ -168,6 +183,7 @@ void MqttClient::publishHeartbeat(const char* state, uint32_t sequence, uint16_t
     doc["state"] = state; doc["seq"] = sequence;
     doc["boot_id"] = bootId_;
     doc["uptime_ms"]=millis();
+    doc["utc_synced"]=time(nullptr)>=1704067200;
     if (minute<1440) { doc["device_local_minute"]=minute; doc["device_epoch_local"]=epoch; }
     if (mutex_) {
         xSemaphoreTake(mutex_,portMAX_DELAY);
@@ -175,21 +191,22 @@ void MqttClient::publishHeartbeat(const char* state, uint32_t sequence, uint16_t
         xSemaphoreGive(mutex_);
     }
     char payload[384]; serializeJson(doc, payload, sizeof(payload));
-    publishOrQueue("pillbox/PB01/heartbeat", payload,false,true);
+    publishKind("heartbeat", payload,false,true);
 }
 
 void MqttClient::publishStatus(const char* state, uint32_t sequence) {
     JsonDocument doc; doc["device_id"] = AppConfig::DEVICE_ID; doc["state"] = state; doc["seq"] = sequence;
     doc["boot_id"]=bootId_; doc["uptime_ms"]=millis();
     char payload[180]; serializeJson(doc, payload, sizeof(payload));
-    publishOrQueue("pillbox/PB01/status", payload,false,true);
+    publishKind("status", payload,false,true);
 }
 
-void MqttClient::publishCommandResult(const char* commandId, const char* command, bool accepted, const Schedule* schedules, uint8_t count) {
+void MqttClient::publishCommandResult(const char* commandId, const char* command, bool accepted, const Schedule* schedules, uint8_t count, const char* refillSession) {
     JsonDocument doc;
     doc["device_id"] = AppConfig::DEVICE_ID; doc["command_id"] = commandId;
     doc["command"] = command; doc["command_result"] = accepted ? "APPLIED" : "REJECTED";
     doc["boot_id"]=bootId_; doc["uptime_ms"]=millis();
+    if (refillSession) doc["refill_session_id"]=refillSession;
     if (accepted && strcmp(command, "UPDATE_SCHEDULE") == 0) {
         auto values = doc["schedules"].to<JsonArray>();
         for (uint8_t i=0; i<count; ++i) {
@@ -199,5 +216,5 @@ void MqttClient::publishCommandResult(const char* commandId, const char* command
         }
     }
     char payload[768]; serializeJson(doc,payload,sizeof(payload));
-    publishOrQueue("pillbox/PB01/status",payload,false,true);
+    publishKind("status",payload,false,true);
 }

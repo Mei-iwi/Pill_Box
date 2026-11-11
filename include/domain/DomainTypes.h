@@ -10,6 +10,7 @@ enum class EventType : uint8_t {
     WRONG_SLOT,
     UNSCHEDULED_OPEN,
     AMBIGUOUS_OPEN,
+    REFILL_OPEN,
     STORAGE_WARNING,
     STORAGE_NORMAL,
     SENSOR_ERROR,
@@ -49,6 +50,7 @@ inline const char* eventTypeName(EventType type) {
         case EventType::WRONG_SLOT: return "WRONG_SLOT";
         case EventType::UNSCHEDULED_OPEN: return "UNSCHEDULED_OPEN";
         case EventType::AMBIGUOUS_OPEN: return "AMBIGUOUS_OPEN";
+        case EventType::REFILL_OPEN: return "REFILL_OPEN";
         case EventType::STORAGE_WARNING: return "STORAGE_WARNING";
         case EventType::STORAGE_NORMAL: return "STORAGE_NORMAL";
         case EventType::SENSOR_ERROR: return "SENSOR_ERROR";
