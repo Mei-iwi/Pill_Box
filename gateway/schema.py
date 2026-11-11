@@ -1,4 +1,5 @@
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS devices (
     device_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'offline', state TEXT,
     last_seen TEXT, last_seq INTEGER DEFAULT 0
