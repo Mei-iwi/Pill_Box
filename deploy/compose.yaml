@@ -1,0 +1,57 @@
+name: pillbox-care
+services:
+  broker:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "${PILLBOX_BROKER_BIND:-127.0.0.1}:8883:8883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./runtime/certs/ca.crt:/mosquitto/certs/ca.crt:ro
+      - ./runtime/certs/server.crt:/mosquitto/certs/server.crt:ro
+      - ./runtime/certs/server.key:/mosquitto/certs/server.key:ro
+      - ./runtime/passwords:/mosquitto/config/passwords:ro
+      - ./runtime/acl:/mosquitto/config/acl:ro
+      - broker-data:/mosquitto/data
+    networks: [device-network]
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    env_file: ./runtime/gateway.env
+    environment:
+      PILLBOX_DEPLOYMENT: care
+      PILLBOX_DB: /data/pillbox.db
+      PILLBOX_AUTH_FILE: /run/pillbox/auth.local.json
+      PILLBOX_MQTT_AUTOSTART: "1"
+      MQTT_HOST: broker
+      MQTT_PORT: "8883"
+      MQTT_TLS: "1"
+      MQTT_CA_FILE: /run/pillbox/ca.crt
+    volumes:
+      - care-data:/data
+      - ./runtime/auth.local.json:/run/pillbox/auth.local.json:ro
+      - ./runtime/certs/ca.crt:/run/pillbox/ca.crt:ro
+    expose: ["5000"]
+    depends_on: [broker]
+    networks: [device-network, application-network]
+  web:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "${PILLBOX_WEB_BIND:-127.0.0.1}:8443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - web-data:/data
+      - web-config:/config
+    depends_on: [gateway]
+    networks: [application-network]
+networks:
+  device-network: {}
+  application-network: {}
+volumes:
+  broker-data: {}
+  care-data: {}
+  web-data: {}
+  web-config: {}

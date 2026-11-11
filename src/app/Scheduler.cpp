@@ -1,13 +1,14 @@
 #include "app/Scheduler.h"
+#include "config/DeviceProfile.h"
 #include <string.h>
 
 Scheduler::Scheduler() { loadDefaults(); }
 
 void Scheduler::loadDefaults() {
-    schedules_[0] = {"S1", "MED001", 1, 8, 0, true, 15, 240};
-    schedules_[1] = {"S2", "MED001", 1, 14, 0, true, 15, 240};
-    schedules_[2] = {"S3", "MED002", 2, 9, 0, true, 15, 240};
-    schedules_[3] = {"S4", "MED003", 3, 20, 0, true, 15, 240};
+    schedules_[0] = {PILLBOX_SCHEDULE_PREFIX "S1", "MED001", 1, 8, 0, true, 15, 240};
+    schedules_[1] = {PILLBOX_SCHEDULE_PREFIX "S2", "MED001", 1, 14, 0, true, 15, 240};
+    schedules_[2] = {PILLBOX_SCHEDULE_PREFIX "S3", "MED002", 2, 9, 0, true, 15, 240};
+    schedules_[3] = {PILLBOX_SCHEDULE_PREFIX "S4", "MED003", 3, 20, 0, true, 15, 240};
     for (uint8_t i = 0; i < MAX_SCHEDULES; ++i) {
         occurrences_[i] = {};
     }

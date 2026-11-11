@@ -97,6 +97,7 @@ def migrate(db):
             "device_uptime_ms": "INTEGER",
             "device_local_minute": "INTEGER",
             "device_epoch_local": "INTEGER",
+            "utc_synced": "INTEGER NOT NULL DEFAULT 0",
         },
         "schedules": {"medication_code": "TEXT"},
         "slot_assignments": {"version": "INTEGER NOT NULL DEFAULT 1"},
@@ -144,7 +145,26 @@ def migrate(db):
             expires_at TEXT NOT NULL,consumed INTEGER NOT NULL DEFAULT 0);
         CREATE TRIGGER IF NOT EXISTS assignment_version_update AFTER UPDATE OF medication_code,patient_id ON slot_assignments
         BEGIN UPDATE slot_assignments SET version=OLD.version+1 WHERE device_id=NEW.device_id AND slot_id=NEW.slot_id; END;
+        CREATE TABLE IF NOT EXISTS refill_sessions (
+            session_id TEXT PRIMARY KEY,verification_id TEXT UNIQUE NOT NULL,
+            device_id TEXT NOT NULL,slot_id INTEGER NOT NULL,actor_id TEXT NOT NULL,
+            boot_id TEXT NOT NULL,command_id TEXT UNIQUE NOT NULL,status TEXT NOT NULL DEFAULT 'PENDING',
+            created_at TEXT NOT NULL,expires_at TEXT NOT NULL,duration_seconds INTEGER NOT NULL,
+            started_uptime_ms INTEGER,end_uptime_ms INTEGER,opened_count INTEGER NOT NULL DEFAULT 0,
+            last_opened_at TEXT);
+        CREATE INDEX IF NOT EXISTS refill_session_device ON refill_sessions(device_id,status);
+        CREATE TABLE IF NOT EXISTS alerts (
+            alert_id INTEGER PRIMARY KEY AUTOINCREMENT,alert_key TEXT UNIQUE NOT NULL,
+            device_id TEXT NOT NULL,kind TEXT NOT NULL,severity TEXT NOT NULL,
+            slot_id INTEGER NOT NULL DEFAULT 0,occurrence_id TEXT,source_event_id TEXT,
+            status TEXT NOT NULL DEFAULT 'OPEN',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+            acknowledged_by TEXT,acknowledged_at TEXT,resolved_at TEXT);
+        CREATE INDEX IF NOT EXISTS alert_device_status ON alerts(device_id,status,alert_id);
     """)
+    if "refill_session_id" not in {
+        r[1] for r in db.execute("PRAGMA table_info(medication_events)")
+    }:
+        db.execute("ALTER TABLE medication_events ADD COLUMN refill_session_id TEXT")
 
 
 def rows(db, sql, args=()):

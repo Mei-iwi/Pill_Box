@@ -111,6 +111,29 @@ try {
   assert(browserLatency<2000,'Polling took more than 2 seconds: '+browserLatency);
   console.log('BROWSER_UPDATE_MS='+browserLatency+' (isolated snapshot fixture, not firmware end-to-end)');
   await evaluate('window.fetch=window.beforeLatencyFetch;renderCache.clear();load()');
+  // Central alerts: isolated response fixture and stub ACK; no live alert is changed.
+  await evaluate(`
+    window.beforeAlertFetch=window.fetch;window.fixtureAlertOpen=true;
+    window.fetch=async(url,options={})=>{
+      if(options.method==='POST' && String(url)==='/api/alerts/900001/ack'){
+        window.fixtureAlertOpen=false;
+        return new Response(JSON.stringify({status:'RESOLVED'}),{status:200,headers:{'Content-Type':'application/json'}});
+      }
+      const response=await window.beforeAlertFetch(url,options);
+      if(String(url).includes('/live?')){
+        const snapshot=await response.json();
+        snapshot.alerts={items:window.fixtureAlertOpen?[{alert_id:900001,device_id:'PB01',kind:'UNSCHEDULED_OPEN',severity:'critical',slot_id:2,status:'OPEN',created_at:new Date().toISOString()}]:[],total:window.fixtureAlertOpen?1:0,page:1,pages:1,page_size:8};
+        return new Response(JSON.stringify(snapshot),{status:200,headers:{'Content-Type':'application/json'}});
+      }
+      return response;
+    };renderCache.clear();load();
+  `);
+  await until("!document.querySelector('#alerts-panel').hidden && document.querySelector('#care-alerts button')");
+  assert(await evaluate("document.querySelector('#care-alerts').textContent.includes('PB01')"));
+  await screenshot('.pio/ui-alerts.png');
+  await evaluate("document.querySelector('#care-alerts button').click()");
+  await until("document.querySelector('#alerts-panel').hidden");
+  await evaluate('window.fetch=window.beforeAlertFetch;renderCache.clear();load()');
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 650, deviceScaleFactor: 1, mobile: false });
   await checkStickyBars();
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
@@ -152,13 +175,24 @@ try {
   await evaluate(`
     window.uiOriginalFetch=window.fetch;
     window.uiPosts=[];
-    window.fetch=(url,options={})=>{
+    window.uiRefillSession=null;
+    window.fetch=async(url,options={})=>{
       if(options.method==='POST' && String(url).startsWith('/api/refill/')){
         window.uiPosts.push({url,body:JSON.parse(options.body)});
-        const result=String(url).endsWith('/verify')
+        let result=String(url).endsWith('/verify')
           ? {result:'VERIFIED',verification_id:'ui-only-token',expires_at:new Date(Date.now()+300000).toISOString()}
           : {result:'CONFIRMED'};
+        if(String(url).endsWith('/authorize')){
+          window.uiRefillSession={session_id:'a'.repeat(32),verification_id:'ui-only-token',status:'ACTIVE',slot_id:1,opened_count:1,expires_at:new Date(Date.now()+300000).toISOString()};
+          result={session_id:'a'.repeat(32),status:'PENDING'};
+        }
+        if(String(url).endsWith('/confirm'))window.uiRefillSession=null;
         return Promise.resolve(new Response(JSON.stringify(result),{status:200,headers:{'Content-Type':'application/json'}}));
+      }
+      if(String(url).includes('/live?')){
+        const response=await window.uiOriginalFetch(url,options);
+        const snapshot=await response.json();snapshot.refill_session=window.uiRefillSession;
+        return new Response(JSON.stringify(snapshot),{status:200,headers:{'Content-Type':'application/json'}});
       }
       return window.uiOriginalFetch(url,options);
     };
@@ -166,11 +200,18 @@ try {
     document.querySelector('#medication').value='MED001';
     document.querySelector('#refill-form').requestSubmit();
   `);
-  await until("!document.querySelector('#confirm').disabled");
+  await until("!document.querySelector('#authorize-refill').disabled");
   await evaluate("document.querySelector('#medication').value='MED002';document.querySelector('#medication').dispatchEvent(new Event('input',{bubbles:true}))");
   assert(await evaluate("document.querySelector('#confirm').disabled"), 'Editing invalidates verification');
   await evaluate("document.querySelector('#medication').value='MED001';document.querySelector('#refill-form').requestSubmit()");
+  await until("!document.querySelector('#authorize-refill').disabled");
+  await evaluate("document.querySelector('#authorize-refill').click()");
   await until("!document.querySelector('#confirm').disabled");
+  await evaluate("window.uiRefillSession.status='CLOSED';window.uiRefillSession.end_uptime_ms=null;load()");
+  await until("document.querySelector('#refill-session').textContent.includes('Chờ thiết bị kết thúc')");
+  assert(await evaluate("!document.querySelector('#end-refill').disabled"),'Allow retry until close ACK');
+  await evaluate("window.uiRefillSession.end_uptime_ms=104000;load()");
+  await until("document.querySelector('#end-refill').disabled");
   await evaluate("document.querySelector('#confirm').click()");
   await until("document.querySelector('#refill-result').textContent==='Đã xác nhận nạp'");
   assert.equal(await evaluate("window.uiPosts.at(-1).body.verification_id"), 'ui-only-token');
@@ -196,7 +237,7 @@ try {
     assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Mobile overflow: ' + view);
   }
   assert.deepEqual(errors, [], 'Browser JavaScript exception');
-  console.log('UI_SMOKE_PASS: desktop/mobile, fixed submenu on scroll, real photos/favicon, black text/blue buttons, removed copy/icons, 4 paginated lists (fixture GETs), refill (stub POSTs), no overflow/JS exceptions. Live requests read-only.');
+  console.log('UI_SMOKE_PASS: desktop/mobile, fixed submenu on scroll, real photos/favicon, black text/blue buttons, removed copy/icons, 4 paginated lists (fixture GETs), authorized refill (stub POSTs), central alert resolve (fixture), no overflow/JS exceptions. Live requests read-only.');
   console.log('Screenshots: .pio/ui-desktop.png, .pio/ui-mobile.png');
 } finally {
   socket.close();

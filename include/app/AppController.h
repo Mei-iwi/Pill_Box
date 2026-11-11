@@ -10,6 +10,7 @@
 #include "communication/WifiManager.h"
 #include "communication/MqttClient.h"
 #include "domain/StorageMonitor.h"
+#include "domain/RefillWindow.h"
 
 class AppController {
 public:
@@ -36,6 +37,10 @@ private:
     bool wasConnected_ = false;
     bool alertSilenced_ = false;
     StorageMonitor storageMonitor_;
+    RefillWindow refillWindow_;
+    bool incidentActive_ = false;
+    uint8_t incidentSlot_ = 0;
+    unsigned long incidentStarted_ = 0;
     static void handleCommand(void* context, const char* payload);
     void handleCommandPayload(const char* payload);
     void handleEvent(const SchedulerEvent& event);

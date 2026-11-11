@@ -7,6 +7,7 @@ from pathlib import Path
 from flask import Flask, g, jsonify, render_template, request
 
 from .auth import actor, configure_auth, scoped
+from .care_routes import alert_filter, close_refill_session, register_care_routes
 from .db import connect, init_db, rows, utc_now
 from .mqtt_service import publish_command, start_mqtt
 
@@ -116,6 +117,9 @@ def create_app(test_config=None):
     )
     app.config.update(DB_PATH=db_path)
     app.config["MQTT_CLIENT"] = (test_config or {}).get("MQTT_CLIENT")
+    app.config["REQUIRE_REFILL_SESSION"] = (test_config or {}).get(
+        "REQUIRE_REFILL_SESSION", os.getenv("PILLBOX_DEPLOYMENT") == "care"
+    )
     init_db(db_path)
     configure_auth(app, test_config)
 
@@ -131,6 +135,8 @@ def create_app(test_config=None):
         return jsonify(
             identity=g.identity, auth_enabled=app.config["AUTH_IDENTITIES"] is not None
         )
+
+    register_care_routes(app, page_data)
 
     @app.get("/")
     def dashboard():
@@ -242,6 +248,30 @@ def create_app(test_config=None):
                     },
                     "server_received_at": utc_now(),
                 }
+                alert_where, alert_args = alert_filter()
+                result["alerts"] = page_data(
+                    db,
+                    "alerts",
+                    alert_where,
+                    alert_args,
+                    "alert_id DESC",
+                    request.args.get("alerts_page", 1),
+                    size,
+                )
+                result["refill_session"] = None
+                if caregiver:
+                    sessions = rows(
+                        db,
+                        "SELECT session_id,verification_id,slot_id,status,expires_at,opened_count,end_uptime_ms FROM refill_sessions WHERE device_id=? AND actor_id=? ORDER BY created_at DESC LIMIT 1",
+                        (
+                            device_id,
+                            g.identity["actor_id"]
+                            if g.identity
+                            else request.args.get("actor_id", "NURSE01"),
+                        ),
+                    )
+                    if sessions:
+                        result["refill_session"] = sessions[0]
             response = jsonify(result)
             response.headers["Cache-Control"] = "no-store"
             return response
@@ -503,6 +533,17 @@ def create_app(test_config=None):
         ):
             result = "STALE_VERIFICATION"
         if result == "CONFIRMED":
+            session = db.execute(
+                "SELECT * FROM refill_sessions WHERE verification_id=?",
+                (body["verification_id"],),
+            ).fetchone()
+            if (session or app.config["REQUIRE_REFILL_SESSION"]) and (
+                not session
+                or session["status"] not in ("ACTIVE", "CLOSED")
+                or not session["opened_count"]
+            ):
+                result = "REFILL_OPEN_REQUIRED"
+        if result == "CONFIRMED":
             db.execute(
                 "UPDATE refill_verifications SET consumed=1 WHERE verification_id=?",
                 (body["verification_id"],),
@@ -524,9 +565,14 @@ def create_app(test_config=None):
         )
         db.commit()
         db.close()
-        return jsonify({"result": result, "audit_id": audit.lastrowid}), (
-            200 if result == "CONFIRMED" else 409
+        closing = (
+            close_refill_session(app.config, body["verification_id"])
+            if result == "CONFIRMED"
+            else None
         )
+        return jsonify(
+            {"result": result, "audit_id": audit.lastrowid, "session_close": closing}
+        ), (200 if result == "CONFIRMED" else 409)
 
     @app.get("/api/refill/audit")
     def refill_audit():

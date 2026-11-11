@@ -5,7 +5,14 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from .care_service import (
+    apply_refill_ack,
+    resolve_alerts,
+    update_alerts,
+    validate_refill_open,
+)
 from .db import connect, utc_now
+from .mqtt_config import configure_mqtt
 
 LOGGER = logging.getLogger(__name__)
 EVENTS = {
@@ -19,6 +26,7 @@ EVENTS = {
     "SENSOR_ERROR",
     "UNSCHEDULED_OPEN",
     "AMBIGUOUS_OPEN",
+    "REFILL_OPEN",
 }
 TOPIC_KINDS = {"status", "event", "environment", "heartbeat"}
 
@@ -40,6 +48,26 @@ def validate_message(topic, payload):
     if not isinstance(message, dict) or message.get("device_id") != parts[1]:
         raise ValueError("invalid device_id")
     kind = parts[2]
+    if "utc_synced" in message and not isinstance(message["utc_synced"], bool):
+        raise ValueError("invalid UTC synchronization flag")
+    if "refill_session_id" in message and (
+        not isinstance(message["refill_session_id"], str)
+        or len(message["refill_session_id"]) != 32
+        or any(c not in "0123456789abcdef" for c in message["refill_session_id"])
+    ):
+        raise ValueError("invalid refill session ID")
+    if (
+        kind == "event"
+        and message.get("event") == "REFILL_OPEN"
+        and (
+            message.get("schema_version") != 2
+            or message.get("occurrence_id") is not None
+            or "refill_session_id" not in message
+        )
+    ):
+        raise ValueError(
+            "refill events require session identity and no medication occurrence"
+        )
     for key, maximum in (
         ("uptime_ms", 4294967295),
         ("device_local_minute", 1439),
@@ -161,9 +189,16 @@ def validate_message(topic, payload):
     return message
 
 
-def store_message(topic, message, db_path=None):
+def store_message(topic, message, db_path=None, registered_only=False):
     message = validate_message(topic, message)
     with connect(db_path) as db:
+        if (
+            registered_only
+            and not db.execute(
+                "SELECT 1 FROM devices WHERE device_id=?", (message["device_id"],)
+            ).fetchone()
+        ):
+            raise ValueError("device must be provisioned before MQTT access")
         _store_message(topic, message, db)
 
 
@@ -187,6 +222,10 @@ def touch_device(db, message, state=None, status="online", storage=None):
     if fresh:
         fields["status"] = status
         if new_boot:
+            db.execute(
+                "UPDATE refill_sessions SET status='CLOSED' WHERE device_id=? AND boot_id!=? AND status IN ('PENDING','ACTIVE')",
+                (message["device_id"], boot),
+            )
             fields.update(
                 boot_id=boot,
                 last_seq=0,
@@ -195,6 +234,7 @@ def touch_device(db, message, state=None, status="online", storage=None):
                 device_uptime_ms=None,
                 device_local_minute=None,
                 device_epoch_local=None,
+                utc_synced=0,
             )
         if seq is not None:
             fields["last_seq"] = seq
@@ -204,6 +244,7 @@ def touch_device(db, message, state=None, status="online", storage=None):
             fields["storage_status"] = storage
         for key, column in (
             ("uptime_ms", "device_uptime_ms"),
+            ("utc_synced", "utc_synced"),
             ("device_local_minute", "device_local_minute"),
             ("device_epoch_local", "device_epoch_local"),
             ("queue_depth", "queue_depth"),
@@ -255,6 +296,8 @@ def _store_message(topic, message, db):
             ).fetchone()
             if pending and pending["command"] == message.get("command"):
                 result = message["command_result"]
+                if pending["command"] in ("BEGIN_REFILL", "END_REFILL"):
+                    result = apply_refill_ack(db, message, pending)
                 if pending["command"] == "UPDATE_SCHEDULE" and result == "APPLIED":
                     wanted = json.loads(pending["payload"])
                     matching = [
@@ -284,6 +327,8 @@ def _store_message(topic, message, db):
                     (result, utc_now(), message["command_id"]),
                 )
     elif kind == "event":
+        if message["event"] == "REFILL_OPEN":
+            validate_refill_open(db, message)
         storage = {
             "STORAGE_WARNING": "WARNING",
             "STORAGE_NORMAL": "NORMAL",
@@ -314,6 +359,15 @@ def _store_message(topic, message, db):
                 message.get("device_time_quality", "legacy"),
             ),
         ).rowcount
+        if inserted and message["event"] == "REFILL_OPEN":
+            db.execute(
+                "UPDATE medication_events SET refill_session_id=? WHERE event_id=?",
+                (message["refill_session_id"], message["event_id"]),
+            )
+            db.execute(
+                "UPDATE refill_sessions SET opened_count=opened_count+1,last_opened_at=? WHERE session_id=?",
+                (utc_now(), message["refill_session_id"]),
+            )
         outcomes = {
             "REMINDER_STARTED": "PENDING",
             "MISSED": "MISSED",
@@ -344,6 +398,8 @@ def _store_message(topic, message, db):
                     message.get("occurred_at"),
                 ),
             )
+        if inserted:
+            update_alerts(db, message)
     elif kind == "environment":
         touch_device(
             db,
@@ -352,6 +408,28 @@ def _store_message(topic, message, db):
                 "storage_status", "SENSOR_ERROR" if not message["sensor_ok"] else None
             ),
         )
+        current = db.execute(
+            "SELECT boot_id,last_seq FROM devices WHERE device_id=?", (device_id,)
+        ).fetchone()
+        if current["last_seq"] == message["seq"] and (
+            not message.get("boot_id") or current["boot_id"] == message["boot_id"]
+        ):
+            storage = message.get("storage_status")
+            if message["sensor_ok"] and storage != "SENSOR_ERROR":
+                resolve_alerts(db, device_id, ["SENSOR_ERROR"])
+            if storage == "NORMAL":
+                resolve_alerts(db, device_id, ["STORAGE_WARNING", "SENSOR_ERROR"])
+            elif storage in ("WARNING", "SENSOR_ERROR") or not message["sensor_ok"]:
+                update_alerts(
+                    db,
+                    {
+                        **message,
+                        "event": "SENSOR_ERROR"
+                        if not message["sensor_ok"] or storage == "SENSOR_ERROR"
+                        else "STORAGE_WARNING",
+                        "slot_id": 0,
+                    },
+                )
         sampled = message.get("sampled_epoch_local", 0)
         sampled_at = (
             datetime.fromtimestamp(sampled, timezone.utc)
@@ -380,7 +458,12 @@ def _store_message(topic, message, db):
 def on_message(client, userdata, message):
     try:
         parsed = validate_message(message.topic, message.payload)
-        store_message(message.topic, parsed, userdata.get("db_path"))
+        store_message(
+            message.topic,
+            parsed,
+            userdata.get("db_path"),
+            userdata.get("registered_only", False),
+        )
     except ValueError as exc:
         LOGGER.warning("Rejected MQTT message: %s", exc)
     except sqlite3.Error:
@@ -414,7 +497,16 @@ def start_mqtt(db_path, host, port, client_id=None):
         mqtt.CallbackAPIVersion.VERSION2,
         client_id=client_id or f"pillbox-gateway-{uuid.uuid4().hex[:10]}",
     )
-    client.user_data_set({"db_path": db_path})
+    configure_mqtt(client)
+    import os
+
+    client.user_data_set(
+        {
+            "db_path": db_path,
+            "registered_only": os.getenv("PILLBOX_DEPLOYMENT") == "care"
+            or os.getenv("PILLBOX_REQUIRE_REGISTERED_DEVICES") == "1",
+        }
+    )
     client.on_message = on_message
     client.on_connect = on_connect
     client.reconnect_delay_set(min_delay=1, max_delay=15)
