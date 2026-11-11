@@ -7,6 +7,7 @@ from pathlib import Path
 from flask import Flask, g, jsonify, render_template, request
 
 from .auth import actor, configure_auth, scoped
+from .config import load_environment
 from .care_routes import alert_filter, close_refill_session, register_care_routes
 from .db import connect, init_db, rows, utc_now
 from .mqtt_service import publish_command, start_mqtt
@@ -111,6 +112,8 @@ def environment_rows(db, device_id, boot):
 
 
 def create_app(test_config=None):
+    if test_config is None:
+        load_environment()
     app = Flask(__name__, template_folder="templates", static_folder="static")
     db_path = (test_config or {}).get(
         "DB_PATH",
@@ -620,10 +623,15 @@ def create_app(test_config=None):
     return app
 
 
-if __name__ == "__main__":
+def main():
     app = create_app()
     app.run(
         host=os.getenv("PILLBOX_BIND", "127.0.0.1"),
         port=int(os.getenv("PORT", "5000")),
         debug=False,
+        load_dotenv=False,
     )
+
+
+if __name__ == "__main__":
+    main()

@@ -21,6 +21,8 @@ services:
     restart: unless-stopped
     env_file: ./runtime/gateway.env
     environment:
+      PILLBOX_MODE: mqtt
+      PILLBOX_LOAD_ENV: "0"
       PILLBOX_DEPLOYMENT: care
       PILLBOX_DB: /data/pillbox.db
       PILLBOX_AUTH_FILE: /run/pillbox/auth.local.json

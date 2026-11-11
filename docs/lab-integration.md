@@ -44,7 +44,7 @@ Lịch nhắc và thao tác vật lý tiếp tục cục bộ khi mất mạng. 
 
 ## Kiểm thử HTTP bằng Postman hoặc curl
 
-Chạy `gateway.local_system`: HTTP ingest chỉ mở tại chế độ local và chỉ admin được gửi. Gateway thông thường phải đặt `PILLBOX_HTTP_INGEST=1` nếu muốn bật API kiểm thử; mặc định tắt. Không dùng API kiểm thử để giả mạo bản tin của thiết bị đang hoạt động.
+API HTTP ingest chỉ dành cho admin và chỉ mở khi `PILLBOX_HTTP_INGEST=1`. Mẫu `gateway/.env` local đặt `1`, mẫu Wokwi đặt `0`; Gateway đọc file cấu hình khi khởi động nên không cần export mỗi lần chạy. Có thể tắt API kiểm thử ngay cả trong local mode bằng giá trị `0`. Không dùng API kiểm thử để giả mạo bản tin của thiết bị đang hoạt động.
 
 Ví dụ PB06 trên DB kiểm thử riêng:
 

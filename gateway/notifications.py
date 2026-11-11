@@ -7,6 +7,7 @@ import ssl
 from email.message import EmailMessage
 
 from .db import connect, utc_now
+from .config import load_environment, project_path
 
 
 def dispatch(path, send=False, limit=20, transport=None):
@@ -85,13 +86,16 @@ def smtp_send(item):
 
 
 def main():
+    load_environment()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", default="gateway/data/pillbox.db")
+    parser.add_argument(
+        "--db", default=os.getenv("PILLBOX_DB", "gateway/data/pillbox.db")
+    )
     parser.add_argument(
         "--send", action="store_true", help="Explicitly deliver via configured SMTP TLS"
     )
     args = parser.parse_args()
-    print(dispatch(args.db, send=args.send))
+    print(dispatch(project_path(args.db), send=args.send))
 
 
 if __name__ == "__main__":

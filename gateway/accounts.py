@@ -2,10 +2,13 @@
 
 import argparse
 import json
+import os
 import secrets
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+
+from .config import load_environment, project_path
 
 DEFAULT_PATH = Path(__file__).parent / "auth.local.json"
 
@@ -31,13 +34,17 @@ def create_accounts(path=DEFAULT_PATH):
 
 
 def main():
+    load_environment()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["create", "show"])
-    parser.add_argument("--file", default=str(DEFAULT_PATH))
+    parser.add_argument(
+        "--file", default=os.getenv("PILLBOX_AUTH_FILE") or str(DEFAULT_PATH)
+    )
     parser.add_argument(
         "--rotate", action="store_true", help="Back up and replace existing keys"
     )
     args = parser.parse_args()
+    args.file = str(project_path(args.file))
     if args.action == "create":
         path = Path(args.file)
         if args.rotate and path.exists():

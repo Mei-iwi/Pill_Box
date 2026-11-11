@@ -6,4 +6,5 @@
 **/Secrets.h
 **/auth.local.json
 **/.env
+**/.env.*
 deploy/runtime

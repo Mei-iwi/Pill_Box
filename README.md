@@ -4,7 +4,27 @@ Hệ thống dùng ESP32-S2 để nhắc lịch lấy thuốc, ghi nhận mở b
 
 Mở ngăn chỉ xác nhận thao tác lấy thuốc. Cấu hình và dữ liệu kiểm thử dùng hồ sơ ẩn danh, không phải đơn thuốc hoặc lịch sử chăm sóc thật.
 
-**Lần đầu:** làm mục 2 → 3 → 4 để chạy local. **Những lần sau:** chỉ chạy lại Gateway và lấy khóa bằng `gateway.accounts show`, không reset dữ liệu.
+**Lần đầu:** làm mục 2 → 3 → 4 để chạy local. **Những lần sau:** chạy `./.venv/Scripts/python.exe -m gateway`. Chế độ, DB, cổng web và broker được giữ trong `gateway/.env`; không cần khai báo lại biến hoặc reset dữ liệu.
+
+### Khởi động nhanh khi đã thiết lập
+
+Mở terminal tại thư mục gốc project, chỉ chạy **một** lệnh phù hợp với terminal đang dùng:
+
+Git Bash:
+
+```bash
+./.venv/Scripts/python.exe -m gateway
+```
+
+PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m gateway
+```
+
+Mở **http://127.0.0.1:5000** với cấu hình mặc định. Nếu đã đổi `PORT`, mở đúng cổng đã lưu. Giữ terminal Gateway chạy; nhấn Ctrl+C để dừng trước khi chạy lại.
+
+Muốn đổi chế độ, DB hoặc cổng, sửa **`gateway/.env`** rồi khởi động lại. File đã tồn tại và đúng cấu hình thì giữ nguyên. Khi người khác clone về, họ cần tạo `.env` từ mẫu vì file cấu hình riêng không được đưa lên Git.
 
 | Cần làm | Hướng dẫn |
 |---|---|
@@ -29,19 +49,21 @@ Hộp local trực tuyến nhờ tiến trình mô phỏng gửi heartbeat mỗi
 
 Cần Git, Python 3.11–3.13 và trình duyệt. Firmware cần VS Code, PlatformIO IDE và Wokwi Simulator.
 
-Nhánh chứa bản tích hợp là `feat/lab-integration`. Lệnh clone bên dưới dùng được sau khi nhánh đã được push lên GitHub; nếu đang có bản làm việc này trên máy thì bỏ qua bước clone. Nếu không tìm thấy nhánh, cần lấy bản đã được người quản lý repository phát hành.
+Clone bản trên nhánh `main`; nếu đã có project thì bỏ qua bước clone. Khi thử một tính năng chưa merge vào main, chuyển sang đúng nhánh được cung cấp.
+
+Hướng dẫn chạy bằng `.env` cần phiên bản có `gateway/config.py` và `gateway/__main__.py`. Nếu hai file chưa có, bản source đang dùng chưa chứa thay đổi cấu hình này.
 
 ```bash
-git clone --branch feat/lab-integration --single-branch https://github.com/Mei-iwi/Pill_Box.git
+git clone https://github.com/Mei-iwi/Pill_Box.git
 cd Pill_Box
 code .
 ```
 
-Đã clone: lưu/commit thay đổi cá nhân, rồi cập nhật khi nhánh đã có trên remote:
+Đã clone: lưu/commit thay đổi cá nhân trước khi cập nhật:
 
 ```bash
 git fetch origin
-git switch feat/lab-integration
+git switch main
 git pull --ff-only
 ```
 
@@ -65,7 +87,89 @@ Linux/macOS: tạo bằng `python3 -m venv .venv`, dùng `./.venv/bin/python` tr
 
 Không cần chạy `Activate.ps1`: các lệnh gọi thẳng Python trong `.venv`. Nếu Windows chưa nhận `python`, dùng `py -3` khi tạo môi trường. Các lần mở project sau không phải tạo lại `.venv`.
 
+Sau khi pull phiên bản bổ sung dependency, chạy lại lệnh `pip install -r gateway/requirements.txt` bằng Python `.venv` ở trên. Cơ chế đọc `.env` sử dụng `python-dotenv`.
+
 Git Bash dùng `cd /d/StudyMaterials/...`; PowerShell dùng `cd D:\StudyMaterials\...`. Không nhập cú pháp `$env:...` hoặc `&` của PowerShell vào Git Bash.
+
+### Tạo file cấu hình một lần
+
+Tạo file cấu hình local từ mẫu, chỉ làm lần đầu:
+
+Git Bash:
+
+```bash
+cp -n gateway/.env.example gateway/.env
+```
+
+PowerShell:
+
+```powershell
+if (-not (Test-Path gateway/.env)) {
+    Copy-Item gateway/.env.example gateway/.env
+}
+```
+
+Mở `gateway/.env` trong VS Code để chỉnh. Mẫu mặc định chạy sáu hộp phần mềm local:
+
+```dotenv
+PILLBOX_MODE=local
+PILLBOX_DB=gateway/data/pillbox.db
+PILLBOX_AUTH_FILE=gateway/auth.local.json
+PILLBOX_BIND=127.0.0.1
+PORT=5000
+PILLBOX_MQTT_AUTOSTART=0
+PILLBOX_HTTP_INGEST=1
+```
+
+| File | Khi nào sử dụng |
+|---|---|
+| `gateway/.env` | File đang được chương trình đọc; chỉnh ở đây để áp dụng cho những lần chạy sau |
+| `gateway/.env.example`, `gateway/.env.local.example` | Mẫu local để tạo file mới; sửa mẫu không tự đổi cấu hình đang chạy |
+| `gateway/.env.wokwi.example` | Mẫu MQTT/Wokwi; xem mục 5 để chuyển chế độ |
+| `gateway/auth.local.json` | Tài khoản và khóa truy cập; có thể đổi đường dẫn bằng PILLBOX_AUTH_FILE |
+| `include/config/Secrets.h` | Wi-Fi/broker/ID của firmware ESP32; cần build/nạp lại khi thay đổi |
+
+| Biến | Ý nghĩa |
+|---|---|
+| `PILLBOX_MODE` | `local`: sáu hộp phần mềm; `mqtt`: Gateway kết nối thiết bị qua broker |
+| `PILLBOX_DB` | Đường dẫn SQLite; mặc định `gateway/data/pillbox.db` |
+| `PILLBOX_AUTH_FILE` | File tài khoản và khóa; lệnh `accounts create/show` cũng đọc biến này |
+| `PILLBOX_BIND`, `PORT` | Địa chỉ và cổng web |
+| `PILLBOX_MQTT_AUTOSTART` | `1` bật MQTT listener ở chế độ mqtt; local luôn tắt MQTT bên ngoài |
+| `PILLBOX_HTTP_INGEST` | `1` mở API telemetry thử nghiệm cho admin; `0` tắt API này |
+| `MQTT_HOST`, `MQTT_PORT` | Địa chỉ và cổng broker; cần khớp firmware |
+| `MQTT_TLS`, `MQTT_CA_FILE` | Bật TLS và đường dẫn CA của broker riêng |
+| `MQTT_USER`, `MQTT_PASSWORD` | Tài khoản broker khi cần xác thực |
+
+<details>
+<summary>Cấu hình nâng cao và thứ tự ưu tiên</summary>
+
+Quy tắc cấu hình:
+
+- Thứ tự ưu tiên: **tham số CLI → biến terminal/Docker → file `.env` → giá trị mặc định**. Biến đã export trong terminal vẫn thắng file; mở terminal mới hoặc bỏ biến cũ nếu thấy cấu hình không đổi.
+- Chỉ tự đọc `gateway/.env`, không dò file `.env` ở thư mục cha. Đường dẫn tương đối cho DB, tài khoản và chứng chỉ tính từ thư mục gốc repository; trên Windows có thể dùng dấu `/`.
+- Sửa file rồi khởi động lại Gateway. Không cần `source .env`, `export` hay `$env:...` mỗi lần chạy. File không được thực thi như script; `${...}` trong giá trị được giữ nguyên, không nội suy. Đặt giá trị chứa dấu `#` hoặc khoảng trắng trong dấu nháy.
+- File `.env`, các profile `.env.*` riêng và khóa tài khoản được Git bỏ qua, không chép vào Docker image. Chỉ các file `.example` được đưa lên Git.
+- Các lệnh cũ `python -m gateway.local_system` và `python -m gateway.app` vẫn chạy; chúng chọn trực tiếp local hoặc Gateway thông thường. Lệnh chung `python -m gateway` mới chọn theo `PILLBOX_MODE`.
+
+Kiểm tra cấu hình hiệu lực, không in khóa hoặc mật khẩu:
+
+```bash
+./.venv/Scripts/python.exe -m gateway.config
+```
+
+Ghi đè tạm thời hoặc dùng file cấu hình riêng:
+
+```bash
+./.venv/Scripts/python.exe -m gateway --port 5001
+./.venv/Scripts/python.exe -m gateway --env-file gateway/.env.wokwi
+```
+
+Lệnh thứ hai cần file `gateway/.env.wokwi` tồn tại, có thể tạo từ `gateway/.env.wokwi.example`. Thêm `--db`, `--bind`, `--mode local` hoặc `--mode mqtt` khi cần ghi đè. `PILLBOX_ENV_FILE` trong terminal/Docker cũng chọn được file; `PILLBOX_LOAD_ENV=0` tắt đọc file và chỉ dùng biến môi trường. Hai biến chọn/tắt file chỉ nhận từ terminal hoặc CLI, không đọc từ nội dung `.env`.
+
+Chỉ thêm `--mode mqtt` không bật listener nếu `PILLBOX_MQTT_AUTOSTART` vẫn là `0`; cấu hình Wokwi cần cả chế độ mqtt và autostart bằng `1` như mục 5.
+
+</details>
 
 ## 3. Khởi tạo dữ liệu và tài khoản
 
@@ -82,6 +186,8 @@ Git Bash:
 PowerShell: thay `./.venv/Scripts/python.exe` bằng `.\.venv\Scripts\python.exe`.
 
 Dữ liệu mới có **6 hộp, 6 hồ sơ ẩn danh theo khu/phòng, 18 ngăn, 24 lịch nhắc**. Không điền sẵn số đo, kết quả lấy thuốc hoặc trạng thái online; chúng xuất hiện khi mô phỏng/thiết bị gửi dữ liệu.
+
+Nếu đổi `PILLBOX_DB` trong `.env`, dùng đúng đường dẫn đó cho lệnh reset/khởi tạo, ví dụ `--db gateway/data/lab-check.db`. Reset local chỉ cho phép DB trong `gateway/data`; không tự xóa DB mỗi lần khởi động.
 
 | Hộp | Hồ sơ | Khu/phòng | Nhóm chăm sóc |
 |---|---|---|---|
@@ -103,7 +209,7 @@ Danh mục: MED001–Vitamin C, MED002–Vitamin D3, MED003–Canxi, MED004–Vi
 | NURSE_B | Nạp thuốc, cảnh báo, điều khiển | PB04–PB06 |
 | FAMILY01 | Theo dõi | PB01 |
 
-`accounts create` tạo sẵn khóa riêng, lưu tại `gateway/auth.local.json`. Chạy lại giữ nguyên khóa. `accounts show` hiển thị tài khoản, quyền, hộp được phân công và khóa: chỉ sao chép chuỗi ở cột cuối vào web.
+`accounts create` tạo sẵn khóa riêng trong file `PILLBOX_AUTH_FILE`, mặc định `gateway/auth.local.json`. Chạy lại giữ nguyên khóa. `accounts show` đọc cùng file và hiển thị tài khoản, quyền, hộp được phân công, khóa: chỉ sao chép chuỗi ở cột cuối vào web.
 
 Khóa là bearer token, ai giữ khóa có quyền của tài khoản. Khóa được tạo mới dài **24 ký tự ngẫu nhiên**, không cần tự nghĩ/gõ lại. Mỗi máy sinh khóa riêng; tên ADMIN01 hoặc NURSE_A không dùng thay cho khóa.
 
@@ -116,20 +222,20 @@ Nếu nâng cấp từ bản cũ đã có `auth.local.json`, lệnh `create` kh�
 Git Bash:
 
 ```bash
-./.venv/Scripts/python.exe -m gateway.local_system
+./.venv/Scripts/python.exe -m gateway
 ```
 
 PowerShell:
 
 ```powershell
-.\.venv\Scripts\python.exe -m gateway.local_system
+.\.venv\Scripts\python.exe -m gateway
 ```
 
-Mở **http://127.0.0.1:5000**, nhập khóa tại **Tài khoản → Kết nối**. Tên tài khoản và vai trò hiện ngay trên thanh đầu trang. Hộp thoại báo rõ kết quả đăng nhập; nhấn × để đóng.
+Mở **http://127.0.0.1:5000** hoặc cổng đã đặt trong `.env`, nhập khóa tại **Tài khoản → Kết nối**. Tên tài khoản và vai trò hiện ngay trên thanh đầu trang. Hộp thoại báo rõ kết quả đăng nhập; nhấn × để đóng.
 
-Chế độ local tự bật xác thực, dùng `gateway/data/pillbox.db`, không gửi dữ liệu ra broker. Chỉ chạy một Gateway trên cổng 5000. Cổng khác: thêm `--port 5001`. Dừng bằng Ctrl+C.
+Giữ `PILLBOX_MODE=local` trong `.env` để chạy sáu hộp. Chế độ này tự bật xác thực, dùng DB/tài khoản/cổng đã cấu hình và không gửi dữ liệu ra broker. Chỉ chạy một Gateway trên cùng cổng. Dừng bằng Ctrl+C.
 
-`local_system` luôn đọc `gateway/auth.local.json`; biến `PILLBOX_AUTH_FILE` chỉ dùng cho `gateway.app`. Muốn dùng DB kiểm thử khác, khởi tạo DB đó rồi truyền `--db`, ví dụ `gateway.local_system --db gateway/data/lab-check.db --port 5001`.
+Cả local và MQTT đọc `PILLBOX_AUTH_FILE`. Muốn dùng DB kiểm thử khác, khởi tạo DB đó rồi đặt `PILLBOX_DB` trong `.env` hoặc chạy `./.venv/Scripts/python.exe -m gateway --db gateway/data/lab-check.db --port 5001`. `accounts create/show` mặc định dùng cùng file tài khoản, có thể ghi đè bằng `--file`.
 
 Đăng nhập ADMIN01 để kiểm tra đủ PB01–PB06 và số đo mới. Đăng nhập nurse/family sẽ thấy ít hộp hơn theo phân quyền. Trên web, nhấn Ctrl+Shift+R sau khi cập nhật source; Gateway đang chạy cần khởi động lại để nạp mã Python mới.
 
@@ -167,6 +273,8 @@ REFILL_OPEN không hoàn tất lịch lấy thuốc. Đổi hộp/ngăn/mã cầ
 
 Mở Tài khoản, nhập khóa khác → Kết nối để đổi người dùng. Khóa chỉ giữ trong bộ nhớ trang; tải lại trang cần nhập lại.
 
+Nếu cần lấy lại khóa khi Gateway đang chạy, mở **terminal thứ hai** tại project và chạy `./.venv/Scripts/python.exe -m gateway.accounts show`; không nhập lệnh vào terminal đang phục vụ web. Với PowerShell dùng đường dẫn Python tương ứng ở mục 2.
+
 - ADMIN01 thấy 6 hộp; NURSE_A thấy PB01–PB03; NURSE_B thấy PB04–PB06.
 - FAMILY01 chỉ thấy PB01, không có phần nạp thuốc/nút mô phỏng.
 - FAMILY01 không được gửi lệnh điều khiển, kể cả gọi trực tiếp API. Có khóa đúng nhưng vượt quyền sẽ nhận 403.
@@ -190,35 +298,34 @@ Ví dụ trên làm đổi lịch S1 của PB01 sang 08:10 khi nhận ACK. Sau k
 
 ## 5. Chạy firmware bằng Wokwi
 
-Dừng local_system trước khi chuyển chế độ. Gateway thông thường không chạy sáu hộp phần mềm; chỉ hộp có thiết bị gửi heartbeat mới trực tuyến.
+Dừng Gateway local bằng Ctrl+C trước khi chuyển chế độ. Gateway MQTT không chạy sáu hộp phần mềm; chỉ hộp có thiết bị gửi heartbeat mới trực tuyến.
+
+Chỉnh và lưu các dòng sau trong `gateway/.env` **một lần** khi chuyển sang Wokwi:
+
+```dotenv
+PILLBOX_MODE=mqtt
+PILLBOX_MQTT_AUTOSTART=1
+PILLBOX_HTTP_INGEST=0
+MQTT_HOST=test.mosquitto.org
+MQTT_PORT=1883
+MQTT_TLS=0
+```
+
+Giữ DB và file tài khoản đang dùng. Có thể tham khảo toàn bộ mẫu `gateway/.env.wokwi.example`. Broker công khai/không mã hóa chỉ dùng dữ liệu thử nghiệm; cấu hình broker riêng xem `deploy/README.md`. Đổi `.env` chỉ cấu hình Gateway, không tự đổi hoặc nạp lại firmware ESP32.
 
 **Terminal 1, Git Bash:**
 
 ```bash
-export PILLBOX_AUTH_FILE="gateway/auth.local.json"
-export PILLBOX_DB="gateway/data/pillbox.db"
-export MQTT_HOST="test.mosquitto.org"
-export MQTT_PORT="1883"
-export PILLBOX_MQTT_AUTOSTART="1"
-export PILLBOX_BIND="127.0.0.1"
-export PORT="5000"
-./.venv/Scripts/python.exe -m gateway.app
+./.venv/Scripts/python.exe -m gateway
 ```
 
 **Terminal 1, PowerShell:**
 
 ```powershell
-$env:PILLBOX_AUTH_FILE="gateway/auth.local.json"
-$env:PILLBOX_DB="gateway/data/pillbox.db"
-$env:MQTT_HOST="test.mosquitto.org"
-$env:MQTT_PORT="1883"
-$env:PILLBOX_MQTT_AUTOSTART="1"
-$env:PILLBOX_BIND="127.0.0.1"
-$env:PORT="5000"
-.\.venv\Scripts\python.exe -m gateway.app
+.\.venv\Scripts\python.exe -m gateway
 ```
 
-Đặt biến trong cùng terminal khởi chạy Gateway. Chương trình không tự đọc `.env`. Broker trên công khai/không mã hóa, chỉ dùng dữ liệu thử nghiệm.
+Các lần chạy sau dùng lại đúng một lệnh này. Muốn trở về sáu hộp phần mềm, đổi `PILLBOX_MODE=local` rồi khởi động lại. Giữ terminal Gateway đang chạy trong lúc mở simulator.
 
 **Terminal 2, Git Bash:**
 
@@ -286,7 +393,7 @@ Trong **Thiết bị**, lệnh APPLIED có thời gian ACK đo tại Gateway. TI
 
 ### Kiểm thử HTTP/JSON và mức cảnh báo
 
-Dùng ADMIN01 với DB kiểm thử riêng. `local_system` mở sẵn API thử nghiệm; `gateway.app` mặc định tắt, chỉ mở khi đặt `PILLBOX_HTTP_INGEST=1` trong terminal chạy Gateway.
+Dùng ADMIN01 với DB kiểm thử riêng. Mẫu `.env` local đặt `PILLBOX_HTTP_INGEST=1`; mẫu Wokwi đặt `0`. Đặt `1` trong `.env` rồi khởi động lại để mở API thử nghiệm, đặt `0` để tắt. Quyền admin vẫn bắt buộc ở cả hai chế độ.
 
 Trong Postman, gửi `POST http://127.0.0.1:5000/api/devices/PB06/telemetry`, chọn **Authorization → Bearer Token**, nhập khóa admin, chọn **Body → raw → JSON**:
 
@@ -341,7 +448,7 @@ node test/ui_auth.mjs
 
 Tests dùng DB tạm. Test đăng nhập cần Node.js 22+, không cần broker. TLS cần OpenSSL; xem kết quả skip nếu máy thiếu.
 
-Lần kiểm tra bản tích hợp lab: **82/82 test Gateway**, **4/4 test native**, host C++, build Wokwi/Feather/profile TLS và browser desktop/mobile đều đạt. Test SMTP dùng transport giả; kết quả build không thay thế nghiệm thu board thật.
+Lần kiểm tra bản cấu hình `.env` đạt **97/97 test Gateway**, trong đó có 15 test cấu hình/CLI về thứ tự ưu tiên, đường dẫn, profile, tài khoản và cách khởi động. Các kiểm tra trước đó của bản tích hợp lab gồm 4 test native, host C++, build Wokwi/Feather/profile TLS và browser desktop/mobile. Test SMTP dùng transport giả; build không thay thế nghiệm thu board thật.
 
 Firmware: `pio test -e native` cần compiler C++; `pio run -e esp32s2_wokwi` kiểm tra mô phỏng, `pio run -e adafruit_feather_esp32s2` kiểm tra board thật. Host harness:
 
@@ -370,6 +477,10 @@ Sửa đường dẫn executable nếu Edge được cài ở vị trí khác. P
 | Hiện tượng | Xử lý |
 |---|---|
 | Address already in use | Dừng Gateway cũ, chỉ chạy một tiến trình trên cổng 5000 |
+| No module named dotenv | Cài lại requirements bằng Python trong `.venv` |
+| Sửa .env nhưng cấu hình không đổi | Khởi động lại; xem `python -m gateway.config`; biến terminal/Docker có ưu tiên cao hơn |
+| Không tìm thấy env file | Tạo file đã chọn hoặc kiểm tra --env-file/PILLBOX_ENV_FILE |
+| PORT/MQTT_PORT không hợp lệ | Dùng số 1–65535; cờ boolean nhận 0 hoặc 1 |
 | Không yêu cầu khóa truy cập | Chưa bật PILLBOX_AUTH_FILE; local_system tự bật |
 | Kết nối bị kẹt/trang cũ | Khởi động lại Gateway rồi Ctrl+Shift+R |
 | 401 | Sai/thiếu khóa hoặc Gateway dùng file auth khác |
@@ -380,7 +491,7 @@ Sửa đường dẫn executable nếu Edge được cài ở vị trí khác. P
 | Bash lỗi tại & | Dùng đúng lệnh Git Bash, không dùng cú pháp PowerShell |
 | Nạp chưa bắt đầu | Kiểm tra online, UTC, phiên/ACK và đúng ngăn |
 | TIMEOUT | Chưa nhận ACK trong 60 giây; đọc trạng thái trước khi gửi lại |
-| HTTP telemetry trả 404 | Gateway thường chưa bật PILLBOX_HTTP_INGEST; dùng local hoặc bật đúng biến |
+| HTTP telemetry trả 404 | Đặt PILLBOX_HTTP_INGEST=1 trong .env rồi khởi động lại |
 | Mẫu Postman bị đổi sau vài giây | LocalFleet vẫn phát mẫu; ngắt hộp mô phỏng trước khi thử mẫu thủ công |
 | Biểu đồ trống | Kiểm tra hộp, khoảng thời gian và mẫu sensor_ok; chờ chu kỳ chart 10 giây |
 | Không nhận email | Mặc định chỉ ghi outbox; cần cấu hình SMTP và chủ động chạy --send |
@@ -390,6 +501,7 @@ Sửa đường dẫn executable nếu Edge được cài ở vị trí khác. P
 
 - `src/`, `include/`: firmware Scheduler, MQTT, NVS, cảm biến/điều khiển.
 - `gateway/`: Flask, SQLite, phân quyền, phiên nạp/cảnh báo, CLI tài khoản và local simulator.
+- `gateway/config.py`, `gateway/__main__.py`: đọc cấu hình `.env` và lệnh chạy chung; `.env.example`, `.env.local.example`, `.env.wokwi.example` là các mẫu cấu hình.
 - `gateway/lab_routes.py`, `rule_engine.py`, `notifications.py`: API lịch sử/HTTP thử nghiệm, timeout ACK, phân mức cảnh báo và outbox/SMTP.
 - `gateway/templates/`, `gateway/static/`: HTML/CSS/JS, favicon, ảnh tải sẵn.
 - `gateway/data/`: DB và backup, được Git bỏ qua.
