@@ -32,7 +32,7 @@ const roleLabels = { family: 'Gia đình', nurse: 'Người chăm sóc', admin: 
 const views = ['overview', 'schedules', 'history', 'refill', 'devices'];
 let token = '', verification = null, verificationContext = '', expiresAt = 0;
 let loading = false, refreshQueued = false, caregiver = true, authPrompted = false;
-let currentView = 'overview', knownDevices = [], currentSlots = [], lastCommandId = null;
+let currentView = 'overview', knownDevices = [], currentSlots = [], currentSchedules = [], lastCommandId = null;
 let bootstrapReady = false, accessBlocked = false;
 let loginInProgress = false, authVersion = 0;
 let refillSessionId = null;
@@ -189,6 +189,7 @@ function renderDevices(devices, device) {
   $('#control-device').textContent = selected();
 }
 function renderSchedules(schedules, slots, device) {
+  currentSchedules = schedules;
   const civil = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date()).split(':').map(Number);
   const minute = Number.isInteger(device?.device_local_minute) ? device.device_local_minute : civil[0] * 60 + civil[1];
   const next = schedules.filter(schedule => schedule.enabled).sort((a, b) =>
@@ -579,7 +580,7 @@ async function scanBarcodeFrame() {
       if (codes.length && codes[0].rawValue) {
         $('#medication').value = codes[0].rawValue;
         $('#medication').dispatchEvent(new Event('input', {bubbles:true}));
-        message('#scanner-status', 'Đã đọc mã '+codes[0].rawValue+'. Hãy kiểm tra mã và nhấn “Xác minh mã”.', 'success');
+        message('#refill-result', 'Đã đọc mã '+codes[0].rawValue+'. Hãy kiểm tra mã và nhấn “Xác minh mã”.', 'success');
         await stopBarcodeScan();
         return;
       }
@@ -624,8 +625,7 @@ document.querySelectorAll('[data-pill-slot]').forEach(button => button.addEventL
   $('#model-selected-name').textContent = assignment?.medication_name || assignment?.medication_code || 'Ngăn '+slot+' chưa gán';
   $('#model-selected-code').textContent = assignment ? 'Mã thuốc: '+assignment.medication_code : 'Chưa có mã thuốc được gán cho ngăn này.';
   $('#model-selected-state').textContent = assignment ? 'Đã gán thuốc' : 'Chưa gán';
-  const times = [...document.querySelectorAll('#schedules tr')];
-  const scheduleText = currentSlots.find(item => item.slot_id === slot);
-  $('#model-selected-time').textContent = scheduleText ? 'Xem lịch trong mục Lịch nhắc' : 'Chưa có lịch';
+  const times = currentSchedules.filter(item => item.slot_id === slot && item.enabled).sort((a,b) => a.hour*60+a.minute-b.hour*60-b.minute);
+  $('#model-selected-time').textContent = times.length ? times.map(scheduleTime).join(' · ') : 'Chưa có lịch';
 }));
 window.addEventListener('pagehide', stopBarcodeScan);
