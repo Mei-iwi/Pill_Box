@@ -42,6 +42,39 @@
           </div>
           <div class="hero-art"><img src="/static/images/pill-organizer.jpg" alt="Hộp chia thuốc" width="1400" height="933" fetchpriority="high"></div>
         </section>
+        <section class="device-stage" aria-labelledby="device-stage-title">
+          <div class="device-stage-heading">
+            <div><span class="eyebrow">THIẾT BỊ ĐANG THEO DÕI</span><h2 id="device-stage-title">Trạng thái hộp thuốc</h2></div>
+            <span class="live-indicator"><i></i> Đồng bộ trực tiếp</span>
+          </div>
+          <div class="device-stage-layout">
+            <div class="pillbox-render" aria-label="Mô hình hộp thuốc 3D gồm ba ngăn">
+              <div class="pillbox-lid"><span>PILLBOX <small>SMART CARE</small></span></div>
+              <div class="pillbox-body">
+                <button class="pill-compartment compartment-one" data-pill-slot="1" aria-label="Chọn ngăn thuốc 1"><span class="compartment-index">01</span><span class="pill-shapes"><i></i><i></i><i></i></span><small id="model-slot-1">Ngăn 1</small></button>
+                <button class="pill-compartment compartment-two" data-pill-slot="2" aria-label="Chọn ngăn thuốc 2"><span class="compartment-index">02</span><span class="pill-shapes"><i></i><i></i><i></i></span><small id="model-slot-2">Ngăn 2</small></button>
+                <button class="pill-compartment compartment-three" data-pill-slot="3" aria-label="Chọn ngăn thuốc 3"><span class="compartment-index">03</span><span class="pill-shapes"><i></i><i></i><i></i></span><small id="model-slot-3">Ngăn 3</small></button>
+              </div>
+              <div class="pillbox-front">
+                <div class="virtual-display" aria-live="polite">
+                  <span class="display-kicker">NEXT REMINDER</span><strong id="model-display-time">--:--</strong>
+                  <span id="model-display-medication">Đang tải thông tin thuốc</span>
+                  <small id="model-display-slot">Chờ đồng bộ thiết bị</small>
+                </div>
+                <span class="front-mark">PB · CARE</span>
+              </div>
+            </div>
+            <aside class="device-readout">
+              <span class="eyebrow">THÔNG TIN NGĂN ĐƯỢC CHỌN</span>
+              <strong id="model-selected-name">Chưa chọn ngăn</strong>
+              <p id="model-selected-code">Chọn một ngăn trên mô hình để xem thông tin.</p>
+              <div class="readout-rule"></div>
+              <div class="readout-row"><span>Trạng thái</span><strong id="model-selected-state">Đang tải…</strong></div>
+              <div class="readout-row"><span>Lịch uống</span><strong id="model-selected-time">—</strong></div>
+              <p class="model-disclaimer">Màn hình trên là mô phỏng giao diện thiết bị trong dashboard, không phải màn hình vật lý trên ESP32.</p>
+            </aside>
+          </div>
+        </section>
         <section class="metrics" aria-label="Thông tin nhanh">
           <article class="metric"><span class="metric-label">Lịch nhắc tiếp theo</span><strong id="next-time">—</strong><span id="next-reminder" class="metric-note">Đang tải lịch nhắc</span></article>
           <article class="metric"><span class="metric-label">Ngăn đã được gán</span><strong id="assigned-count">—<small>/ 3 ngăn</small></strong><span id="assignment-note" class="metric-note">Đang tải thông tin</span></article>
@@ -77,10 +110,17 @@
         <img class="refill-photo" src="/static/images/medication-container.jpg" alt="Hộp đựng và sắp xếp thuốc" width="1200" height="800" loading="lazy">
         <div class="section-heading"><div><h2>Xác minh thuốc</h2></div></div>
         <form id="refill-form" onsubmit="verifyRefill(event)">
-          <div class="form-grid"><label id="actor-field">Mã người chăm sóc<input id="actor" value="NURSE01" required autocomplete="off"></label><label>Mã người dùng<input id="patient" value="P001" required autocomplete="off"></label><label>Ngăn thuốc<select id="slot"><option value="1">Ngăn 1</option><option value="2">Ngăn 2</option><option value="3">Ngăn 3</option></select></label><label>Mã trên bao bì<input id="medication" placeholder="Nhập hoặc quét mã" required autocomplete="off"></label></div>
+          <div class="form-grid"><label id="actor-field">Mã người chăm sóc<input id="actor" value="NURSE01" required autocomplete="off"></label><label>Mã người dùng<input id="patient" value="P001" required autocomplete="off"></label><label>Ngăn thuốc<select id="slot"><option value="1">Ngăn 1</option><option value="2">Ngăn 2</option><option value="3">Ngăn 3</option></select></label><label>Mã trên bao bì
+            <div class="barcode-entry"><input id="medication" placeholder="Nhập mã hoặc quét barcode" required autocomplete="off"><button class="button secondary scan-trigger" id="scan-barcode" type="button">Quét mã</button></div>
+          </label></div>
           <div id="refill-context" class="refill-context">Hộp PB01 · Ngăn 1 · MED001</div>
           <div class="form-actions"><button class="button primary" type="submit">Xác minh mã</button><button class="button secondary" id="authorize-refill" type="button" onclick="authorizeRefill()" disabled>Bắt đầu nạp</button><button class="button secondary" id="confirm" type="button" onclick="confirmRefill()" disabled>Xác nhận nạp</button><button class="text-button" id="end-refill" type="button" onclick="endRefill()" disabled>Kết thúc phiên</button></div>
         </form>
+        <div id="scanner-panel" class="scanner-panel" hidden>
+          <div class="scanner-heading"><strong>Quét barcode thuốc</strong><button type="button" class="text-button" id="stop-scan">Đóng camera</button></div>
+          <video id="barcode-video" playsinline muted aria-label="Hình ảnh camera để quét barcode"></video>
+          <p id="scanner-status" class="section-note" role="status">Đưa mã vạch vào khung hình.</p>
+        </div>
         <p id="refill-result" class="inline-message" role="status" hidden></p>
         <p id="refill-session" class="inline-message" role="status" hidden></p>
       </section>
@@ -113,6 +153,6 @@
   </main>
 
   <dialog id="settings-dialog"><div class="dialog-heading"><h2>Truy cập hệ thống</h2><button id="settings-close" class="icon-button" aria-label="Đóng">×</button></div><p id="session" class="section-note">Đang kiểm tra kết nối…</p><label>Khóa truy cập API<input id="access-token" type="password" autocomplete="off" placeholder="Nhập khóa cá nhân"></label><button id="login" class="button primary">Kết nối</button><p id="login-result" class="inline-message" role="status" aria-live="polite" hidden></p></dialog>
-  <script src="/static/dashboard.js?v=lab-integration-4"></script>
+  <script src="/static/dashboard.js?v=taste-redesign-1"></script>
 </body>
 </html>
