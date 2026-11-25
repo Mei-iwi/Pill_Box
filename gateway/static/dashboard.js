@@ -208,6 +208,23 @@ function renderSchedules(schedules, slots, device) {
       esc(assignment?.medication_code || '—') + '</p><div>' +
       times.map(schedule => '<span class="slot-time' + (schedule.schedule_id === next?.schedule_id ? ' next' : '') + '">' + scheduleTime(schedule) + '</span>').join('') + '</div></article>';
   }).join('');
+  const selectedSlot = Number(document.querySelector('[data-pill-slot].is-selected')?.dataset.pillSlot || next?.slot_id || 1);
+  const selectedAssignment = slots.find(item => item.slot_id === selectedSlot);
+  const selectedSchedules = schedules.filter(item => item.slot_id === selectedSlot && item.enabled).sort((a,b) => a.hour*60+a.minute-b.hour*60-b.minute);
+  [1,2,3].forEach(slot => {
+    const assignment = slots.find(item => item.slot_id === slot);
+    const modelButton = document.querySelector('[data-pill-slot="'+slot+'"]');
+    const modelLabel = $('#model-slot-'+slot);
+    if (modelLabel) modelLabel.textContent = assignment?.medication_name || assignment?.medication_code || 'Chưa gán';
+    if (modelButton) modelButton.classList.toggle('is-selected', slot === selectedSlot);
+  });
+  $('#model-display-time').textContent = next ? scheduleTime(next) : '--:--';
+  $('#model-display-medication').textContent = next ? (next.medication_name || next.medication_code) : 'Chưa có lịch nhắc';
+  $('#model-display-slot').textContent = next ? 'NGĂN '+next.slot_id+' · '+selected() : 'Chờ cấu hình lịch';
+  $('#model-selected-name').textContent = selectedAssignment?.medication_name || selectedAssignment?.medication_code || 'Ngăn '+selectedSlot+' chưa gán';
+  $('#model-selected-code').textContent = selectedAssignment ? 'Mã thuốc: '+selectedAssignment.medication_code : 'Chưa có mã thuốc được gán cho ngăn này.';
+  $('#model-selected-state').textContent = selectedAssignment ? 'Đã gán thuốc' : 'Chưa gán';
+  $('#model-selected-time').textContent = selectedSchedules.length ? selectedSchedules.map(scheduleTime).join(' · ') : 'Chưa có lịch';
   $('#schedules').innerHTML = schedules.map(schedule => '<tr><td><strong>' + esc(schedule.schedule_id) + '</strong></td><td>Ngăn ' +
     schedule.slot_id + '</td><td>' + esc(schedule.medication_name || schedule.medication_code) + '<small>' + esc(schedule.medication_code) + '</small></td><td><strong>' + scheduleTime(schedule) +
     '</strong></td><td>' + badge(schedule.enabled ? 'APPLIED' : 'IDLE', schedule.enabled ? 'Đang bật' : 'Đã tắt') + '</td></tr>').join('') ||
@@ -540,3 +557,75 @@ document.addEventListener('visibilitychange', () => {
 });
 showView(location.hash.slice(1) || 'overview', false);
 load();
+
+
+/* Barcode camera: native BarcodeDetector where supported, manual entry remains available. */
+let barcodeStream = null, barcodeFrame = null, barcodeDetector = null, barcodeActive = false;
+async function stopBarcodeScan() {
+  barcodeActive = false;
+  if (barcodeFrame) cancelAnimationFrame(barcodeFrame);
+  barcodeFrame = null;
+  if (barcodeStream) barcodeStream.getTracks().forEach(track => track.stop());
+  barcodeStream = null;
+  if ($('#barcode-video')) $('#barcode-video').srcObject = null;
+  $('#scanner-panel').hidden = true;
+}
+async function scanBarcodeFrame() {
+  if (!barcodeActive || !barcodeDetector || !barcodeStream) return;
+  const video = $('#barcode-video');
+  if (video.readyState >= 2) {
+    try {
+      const codes = await barcodeDetector.detect(video);
+      if (codes.length && codes[0].rawValue) {
+        $('#medication').value = codes[0].rawValue;
+        $('#medication').dispatchEvent(new Event('input', {bubbles:true}));
+        message('#scanner-status', 'Đã đọc mã '+codes[0].rawValue+'. Hãy kiểm tra mã và nhấn “Xác minh mã”.', 'success');
+        await stopBarcodeScan();
+        return;
+      }
+    } catch (error) {
+      message('#scanner-status', 'Không đọc được khung hình. Hãy căn chỉnh lại barcode hoặc nhập mã thủ công.');
+    }
+  }
+  barcodeFrame = requestAnimationFrame(scanBarcodeFrame);
+}
+async function startBarcodeScan() {
+  if (!('BarcodeDetector' in window)) {
+    message('#refill-result', 'Trình duyệt này chưa hỗ trợ BarcodeDetector. Bạn có thể nhập mã vạch thủ công.', 'danger');
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    message('#refill-result', 'Không thể truy cập camera. Hãy dùng HTTPS hoặc localhost và nhập mã thủ công.', 'danger');
+    return;
+  }
+  try {
+    const supported = await BarcodeDetector.getSupportedFormats();
+    const formats = ['ean_13','ean_8','upc_a','upc_e','code_128','itf'].filter(format => supported.includes(format));
+    if (!formats.length) throw new Error('Trình duyệt không hỗ trợ định dạng barcode phổ biến.');
+    barcodeDetector = new BarcodeDetector({formats});
+    barcodeStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    $('#barcode-video').srcObject = barcodeStream;
+    $('#scanner-panel').hidden = false;
+    $('#scanner-status').textContent = 'Đưa mã vạch vào camera. Bạn vẫn cần xác minh mã trước khi nạp thuốc.';
+    barcodeActive = true;
+    await $('#barcode-video').play();
+    scanBarcodeFrame();
+  } catch (error) {
+    await stopBarcodeScan();
+    message('#refill-result', error.message || 'Không thể mở camera. Hãy nhập mã vạch thủ công.', 'danger');
+  }
+}
+$('#scan-barcode').addEventListener('click', startBarcodeScan);
+$('#stop-scan').addEventListener('click', stopBarcodeScan);
+document.querySelectorAll('[data-pill-slot]').forEach(button => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-pill-slot]').forEach(item => item.classList.toggle('is-selected', item === button));
+  const slot = Number(button.dataset.pillSlot);
+  const assignment = currentSlots.find(item => item.slot_id === slot);
+  $('#model-selected-name').textContent = assignment?.medication_name || assignment?.medication_code || 'Ngăn '+slot+' chưa gán';
+  $('#model-selected-code').textContent = assignment ? 'Mã thuốc: '+assignment.medication_code : 'Chưa có mã thuốc được gán cho ngăn này.';
+  $('#model-selected-state').textContent = assignment ? 'Đã gán thuốc' : 'Chưa gán';
+  const times = [...document.querySelectorAll('#schedules tr')];
+  const scheduleText = currentSlots.find(item => item.slot_id === slot);
+  $('#model-selected-time').textContent = scheduleText ? 'Xem lịch trong mục Lịch nhắc' : 'Chưa có lịch';
+}));
+window.addEventListener('pagehide', stopBarcodeScan);
