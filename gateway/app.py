@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,6 +25,38 @@ def availability(device):
     if not fresh:
         device["status"] = "offline"
     return device
+
+
+def valid_barcode(value):
+    """Accept common retail checksums and printable Code 128 data."""
+    if not isinstance(value, str) or not 4 <= len(value) <= 48 or value != value.strip():
+        return False
+    if not re.fullmatch(r"[\x20-\x7e]+", value):
+        return False
+    if not value.isascii() or not value.isdigit():
+        return True
+    if len(value) in (8, 12, 13):
+        def checksum_ok(number):
+            digits = list(map(int, number))
+            total = sum(digit * (3 if index % 2 == 0 else 1)
+                        for index, digit in enumerate(reversed(digits[:-1])))
+            return (10 - total % 10) % 10 == digits[-1]
+
+        if checksum_ok(value):
+            return True
+        if len(value) == 8 and value[0] in "01":
+            ns, a, b, c, d, e, f, check = value
+            if f in "012":
+                expanded = ns + a + b + f + "00" + "00" + c + d + e + check
+            elif f == "3":
+                expanded = ns + a + b + c + "00" + "000" + d + e + check
+            elif f == "4":
+                expanded = ns + a + b + c + d + "0" + "0000" + e + check
+            else:
+                expanded = ns + a + b + c + d + e + "0000" + f + check
+            return checksum_ok(expanded)
+        return False
+    return len(value) <= 48
 
 
 def list_result(db, table, where, args, order, default_limit=50, columns="*"):
@@ -147,6 +180,7 @@ def create_app(test_config=None):
             identity=g.identity,
             auth_enabled=app.config["AUTH_IDENTITIES"] is not None,
             local_simulation=app.config.get("LOCAL_SIMULATION", False),
+            demo_admin=app.config.get("LOCAL_DEMO_ADMIN",False) and request.remote_addr in ("127.0.0.1","::1"),
         )
 
     register_care_routes(app, page_data)
@@ -262,9 +296,14 @@ def create_app(test_config=None):
                         "identity": g.identity,
                         "auth_enabled": app.config["AUTH_IDENTITIES"] is not None,
                         "local_simulation": app.config.get("LOCAL_SIMULATION", False),
+                        "demo_admin": app.config.get("LOCAL_DEMO_ADMIN",False) and request.remote_addr in ("127.0.0.1","::1"),
                     },
                     "server_received_at": utc_now(),
+                    "barcode_scan": None,
                 }
+                if caregiver:
+                    scan=db.execute("SELECT * FROM device_barcode_scans WHERE device_id=?",(device_id,)).fetchone()
+                    result["barcode_scan"]=dict(scan) if scan else None
                 alert_where, alert_args = alert_filter()
                 result["alerts"] = page_data(
                     db,
@@ -354,6 +393,35 @@ def create_app(test_config=None):
                 (device_id,),
             )
         return jsonify(result)
+
+    @app.get("/api/medications/barcodes/<path:barcode>")
+    def lookup_barcode(barcode):
+        if not valid_barcode(barcode):
+            return jsonify(error="invalid barcode"), 400
+        with connect(app.config["DB_PATH"]) as db:
+            item = db.execute(
+                "SELECT b.barcode,b.medication_code,m.label medication_name,b.strength,b.dosage_form,b.manufacturer,b.description "
+                "FROM medication_barcodes b JOIN medication_catalog m ON m.medication_code=b.medication_code WHERE b.barcode=?",
+                (barcode,),
+            ).fetchone()
+            if item is None:
+                catalog_item = db.execute(
+                    "SELECT medication_code,label FROM medication_catalog WHERE medication_code=?",
+                    (barcode,),
+                ).fetchone()
+                if catalog_item is not None:
+                    return jsonify(
+                        barcode=barcode,
+                        medication_code=catalog_item["medication_code"],
+                        medication_name=catalog_item["label"],
+                        strength=None,
+                        dosage_form=None,
+                        manufacturer=None,
+                        description=None,
+                    )
+        if item is None:
+            return jsonify(error="barcode not found"), 404
+        return jsonify(dict(item))
 
     @app.post("/api/devices/<device_id>/commands")
     def commands(device_id):

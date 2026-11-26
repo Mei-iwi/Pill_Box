@@ -3,33 +3,388 @@
   "author": "Smart Pill Box",
   "editor": "wokwi",
   "parts": [
-    { "type": "board-esp32-s2-devkitm-1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
-    { "type": "wokwi-pushbutton", "id": "btn1", "top": -100, "left": 250, "attrs": { "color": "green", "label": "Slot 1" } },
-    { "type": "wokwi-pushbutton", "id": "btn2", "top": -35, "left": 250, "attrs": { "color": "yellow", "label": "Slot 2" } },
-    { "type": "wokwi-pushbutton", "id": "btn3", "top": 30, "left": 250, "attrs": { "color": "blue", "label": "Slot 3" } },
-    { "type": "wokwi-led", "id": "led1", "top": 115, "left": 245, "attrs": { "color": "green", "label": "Slot 1" } },
-    { "type": "wokwi-led", "id": "led2", "top": 165, "left": 245, "attrs": { "color": "yellow", "label": "Slot 2" } },
-    { "type": "wokwi-led", "id": "led3", "top": 215, "left": 245, "attrs": { "color": "blue", "label": "Slot 3" } },
-    { "type": "wokwi-resistor", "id": "r1", "top": 115, "left": 150, "attrs": { "value": "220" } },
-    { "type": "wokwi-resistor", "id": "r2", "top": 165, "left": 150, "attrs": { "value": "220" } },
-    { "type": "wokwi-resistor", "id": "r3", "top": 215, "left": 150, "attrs": { "value": "220" } },
-    { "type": "wokwi-buzzer", "id": "buzz", "top": 270, "left": 240, "attrs": { "volume": "0.1" } },
-    { "type": "wokwi-dht22", "id": "dht", "top": 215, "left": -170, "attrs": { "temperature": "31.5", "humidity": "72" } },
-    { "type": "wokwi-ds1307", "id": "rtc", "top": -115, "left": -180, "attrs": { "initTime": "2026-11-10T07:59:50" } }
+    {
+      "type": "board-esp32-s2-devkitm-1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": -100,
+      "left": 250,
+      "attrs": {
+        "color": "green",
+        "label": "Slot 1"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn2",
+      "top": -35,
+      "left": 250,
+      "attrs": {
+        "color": "yellow",
+        "label": "Slot 2"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn3",
+      "top": 30,
+      "left": 250,
+      "attrs": {
+        "color": "blue",
+        "label": "Slot 3"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led1",
+      "top": 115,
+      "left": 245,
+      "attrs": {
+        "color": "green",
+        "label": "Slot 1"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led2",
+      "top": 165,
+      "left": 245,
+      "attrs": {
+        "color": "yellow",
+        "label": "Slot 2"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led3",
+      "top": 215,
+      "left": 245,
+      "attrs": {
+        "color": "blue",
+        "label": "Slot 3"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r1",
+      "top": 115,
+      "left": 150,
+      "attrs": {
+        "value": "220"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r2",
+      "top": 165,
+      "left": 150,
+      "attrs": {
+        "value": "220"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r3",
+      "top": 215,
+      "left": 150,
+      "attrs": {
+        "value": "220"
+      }
+    },
+    {
+      "type": "wokwi-buzzer",
+      "id": "buzz",
+      "top": 270,
+      "left": 240,
+      "attrs": {
+        "volume": "0.1"
+      }
+    },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht",
+      "top": 215,
+      "left": -170,
+      "attrs": {
+        "temperature": "31.5",
+        "humidity": "72"
+      }
+    },
+    {
+      "type": "wokwi-ds1307",
+      "id": "rtc",
+      "top": -115,
+      "left": -180,
+      "attrs": {
+        "initTime": "2026-11-10T07:59:50"
+      }
+    },
+    {
+      "type": "board-ssd1306",
+      "id": "oled",
+      "top": -235,
+      "left": 230,
+      "attrs": {
+        "i2cAddress": "0x3c"
+      }
+    },
+    {
+      "type": "wokwi-membrane-keypad",
+      "id": "scanner",
+      "top": -160,
+      "left": 490,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-text",
+      "id": "scanner-label",
+      "top": -200,
+      "left": 490,
+      "attrs": {
+        "text": "BARCODE INPUT (scanner emulator)\n# send | * delete | A/B/C slot | D clear\nReal UART reader: TX -> GPIO13, RX -> GPIO14"
+      }
+    }
   ],
   "connections": [
-    [ "esp:TX", "$serialMonitor:RX", "", [] ],
-    [ "esp:RX", "$serialMonitor:TX", "", [] ],
-    [ "btn1:1.l", "esp:5", "green", [] ], [ "btn1:2.l", "esp:GND.1", "black", [] ],
-    [ "btn2:1.l", "esp:6", "yellow", [] ], [ "btn2:2.l", "esp:GND.1", "black", [] ],
-    [ "btn3:1.l", "esp:7", "blue", [] ], [ "btn3:2.l", "esp:GND.1", "black", [] ],
-    [ "esp:8", "r1:1", "green", [] ], [ "r1:2", "led1:A", "green", [] ], [ "led1:C", "esp:GND.1", "black", [] ],
-    [ "esp:9", "r2:1", "yellow", [] ], [ "r2:2", "led2:A", "yellow", [] ], [ "led2:C", "esp:GND.1", "black", [] ],
-    [ "esp:10", "r3:1", "blue", [] ], [ "r3:2", "led3:A", "blue", [] ], [ "led3:C", "esp:GND.1", "black", [] ],
-    [ "buzz:1", "esp:11", "purple", [] ], [ "buzz:2", "esp:GND.1", "black", [] ],
-    [ "dht:SDA", "esp:12", "green", [] ], [ "dht:VCC", "esp:3V3", "red", [] ], [ "dht:GND", "esp:GND.1", "black", [] ],
-    [ "rtc:SDA", "esp:3", "green", [] ], [ "rtc:SCL", "esp:4", "blue", [] ], [ "rtc:5V", "esp:5V", "red", [] ], [ "rtc:GND", "esp:GND.1", "black", [] ]
+    [
+      "esp:TX",
+      "$serialMonitor:RX",
+      "",
+      []
+    ],
+    [
+      "esp:RX",
+      "$serialMonitor:TX",
+      "",
+      []
+    ],
+    [
+      "btn1:1.l",
+      "esp:5",
+      "green",
+      []
+    ],
+    [
+      "btn1:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "btn2:1.l",
+      "esp:6",
+      "yellow",
+      []
+    ],
+    [
+      "btn2:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "btn3:1.l",
+      "esp:7",
+      "blue",
+      []
+    ],
+    [
+      "btn3:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "esp:8",
+      "r1:1",
+      "green",
+      []
+    ],
+    [
+      "r1:2",
+      "led1:A",
+      "green",
+      []
+    ],
+    [
+      "led1:C",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "esp:9",
+      "r2:1",
+      "yellow",
+      []
+    ],
+    [
+      "r2:2",
+      "led2:A",
+      "yellow",
+      []
+    ],
+    [
+      "led2:C",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "esp:10",
+      "r3:1",
+      "blue",
+      []
+    ],
+    [
+      "r3:2",
+      "led3:A",
+      "blue",
+      []
+    ],
+    [
+      "led3:C",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "buzz:1",
+      "esp:11",
+      "purple",
+      []
+    ],
+    [
+      "buzz:2",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "dht:SDA",
+      "esp:12",
+      "green",
+      []
+    ],
+    [
+      "dht:VCC",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "dht:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "rtc:SDA",
+      "esp:3",
+      "green",
+      []
+    ],
+    [
+      "rtc:SCL",
+      "esp:4",
+      "blue",
+      []
+    ],
+    [
+      "rtc:5V",
+      "esp:5V",
+      "red",
+      []
+    ],
+    [
+      "rtc:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "oled:SDA",
+      "esp:3",
+      "green",
+      []
+    ],
+    [
+      "oled:SCL",
+      "esp:4",
+      "blue",
+      []
+    ],
+    [
+      "oled:VCC",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "oled:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "scanner:R1",
+      "esp:15",
+      "green",
+      []
+    ],
+    [
+      "scanner:R2",
+      "esp:16",
+      "green",
+      []
+    ],
+    [
+      "scanner:R3",
+      "esp:17",
+      "green",
+      []
+    ],
+    [
+      "scanner:R4",
+      "esp:18",
+      "green",
+      []
+    ],
+    [
+      "scanner:C1",
+      "esp:21",
+      "green",
+      []
+    ],
+    [
+      "scanner:C2",
+      "esp:33",
+      "green",
+      []
+    ],
+    [
+      "scanner:C3",
+      "esp:34",
+      "green",
+      []
+    ],
+    [
+      "scanner:C4",
+      "esp:35",
+      "green",
+      []
+    ]
   ],
-  "serialMonitor": { "display": "always", "newline": "lf", "convertEol": true },
+  "serialMonitor": {
+    "display": "always",
+    "newline": "lf",
+    "convertEol": true
+  },
   "dependencies": {}
 }

@@ -1,5 +1,11 @@
 # Hộp đựng thuốc thông minh
 
+**Bản giao diện ngăn kéo:** Tổng quan là mô phỏng hộp 3D. Khi chạy local trên `127.0.0.1`, hệ thống tạm tự vào ADMIN01, không cần nhập khóa API. Đặt `PILLBOX_LOCAL_LOGIN=1` trong `gateway/.env` và khởi động lại để dùng đăng nhập như trước. Hướng dẫn tài khoản bên dưới vẫn áp dụng khi bật đăng nhập hoặc chạy MQTT.
+
+Tài liệu giao diện mới, tra cứu mã vạch và giới hạn màn hình ảo: [Dashboard redesign](docs/dashboard-redesign.md).
+
+Điều khiển trực tiếp trên mô hình, OLED và đầu đọc mã trong sơ đồ: [Hướng dẫn hộp thuốc](docs/product-controls.md).
+
 Hệ thống dùng ESP32-S2 để nhắc lịch lấy thuốc, ghi nhận mở ba ngăn và theo dõi nhiệt độ/độ ẩm. Gateway Python nhận MQTT, lưu SQLite và cung cấp Dashboard tiếng Việt. Người chăm sóc xác minh mã thuốc, mở phiên nạp giới hạn thời gian rồi xác nhận sau khi mở đúng ngăn.
 
 Mở ngăn chỉ xác nhận thao tác lấy thuốc. Cấu hình và dữ liệu kiểm thử dùng hồ sơ ẩn danh, không phải đơn thuốc hoặc lịch sử chăm sóc thật.

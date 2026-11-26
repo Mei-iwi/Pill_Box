@@ -37,6 +37,7 @@ let bootstrapReady = false, accessBlocked = false;
 let loginInProgress = false, authVersion = 0;
 let refillSessionId = null;
 let historyKey = '', historyFetchedAt = 0, historyLoading = false;
+let selectedSlot = 1, latestSnapshot = null;
 const renderCache = new Map();
 function renderChanged(name, value, render) {
   const fingerprint = JSON.stringify(value);
@@ -77,6 +78,7 @@ function message(selector, text, kind = '') {
 }
 function showView(view, updateHash = true) {
   if (!views.includes(view) || (view === 'refill' && !caregiver)) view = 'overview';
+  if (view !== 'refill') stopScanner();
   currentView = view;
   for (const name of views) $('#view-' + name).hidden = name !== view;
   document.querySelectorAll('.main-nav [data-view]').forEach(button => {
@@ -144,6 +146,39 @@ function renderRefillContext() {
   const assignment = currentSlots.find(item => item.slot_id === slot);
   $('#refill-context').textContent = 'Hộp ' + selected() + ' · Ngăn ' + slot + ' · ' + (assignment ? (assignment.medication_name || assignment.medication_code) + ' (' + assignment.medication_code + ')' : 'Chưa gán');
 }
+function updateSelectedSlot() {
+  const assignment = currentSlots.find(item => item.slot_id === selectedSlot);
+  const schedules = (latestSnapshot?.schedules || []).filter(item => item.slot_id === selectedSlot && item.enabled);
+  $('#selected-medication').textContent = 'Ngăn ' + selectedSlot + ' · ' + (assignment?.medication_name || assignment?.medication_code || 'Chưa gán thuốc');
+  $('#selected-details').textContent = (assignment ? 'Mã ' + assignment.medication_code : 'Chưa có mã thuốc') + ' · ' +
+    (schedules.length ? 'Lịch ' + schedules.map(scheduleTime).join(', ') : 'Chưa có lịch nhắc');
+  $('#selected-status').textContent = assignment ? 'Đã gán' : 'Chưa gán';
+  $('#selected-status').className = 'tag ' + (assignment ? 'success' : 'warning');
+  const online=latestSnapshot?.device?.status==='online';
+  $('#box-source').textContent=latestSnapshot ? (latestSnapshot.session.local_simulation ? 'Thiết bị mô phỏng phần mềm' : 'Thiết bị MQTT · '+selected()) : 'Chưa có dữ liệu';
+  $('#box-live-state').textContent=online ? (labels[latestSnapshot?.device?.state]||'Chờ dữ liệu') : 'Ngoại tuyến';
+  $('#box-record-open').hidden=!caregiver || !latestSnapshot?.session?.local_simulation;
+  $('#box-lamps').innerHTML=[1,2,3].map(slot=>{
+    const alert=(latestSnapshot?.alerts?.items||[]).some(a=>a.device_id===selected() && a.slot_id===slot && a.status!=='RESOLVED');
+    const remind=(latestSnapshot?.occurrences?.items||[]).some(o=>o.slot_id===slot && o.current_outcome==='PENDING');
+    return '<span><i class="console-led '+(!online?'off':alert?'alarm':remind?'remind':'ready')+'"></i>Ngăn '+slot+' · '+(!online?'Tắt':alert?'Cảnh báo':remind?'Nhắc thuốc':'Chờ')+'</span>';
+  }).join('');
+  $('#virtual-lid').textContent=window.pillboxModel?.isLidOpen(selectedSlot)?'Đẩy ngăn vào':'Kéo ngăn ra';
+  document.querySelectorAll('[data-select-slot]').forEach(button => {
+    const active = Number(button.dataset.selectSlot) === selectedSlot;
+    button.closest('.slot-card')?.classList.toggle('selected', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+function selectSlot(slot, fromModel = false) {
+  selectedSlot = Number(slot);
+  if (!fromModel) window.pillboxModel?.select(selectedSlot);
+  if (!verification && $('#slot').value !== String(selectedSlot)) {
+    $('#slot').value = String(selectedSlot);
+    renderRefillContext();
+  }
+  updateSelectedSlot();
+}
 function renderRefillSession(session) {
   if (!verification || session?.verification_id !== verification) return;
   refillSessionId = session.session_id;
@@ -202,11 +237,11 @@ function renderSchedules(schedules, slots, device) {
   $('#slots').innerHTML = [1, 2, 3].map(slot => {
     const assignment = slots.find(item => item.slot_id === slot);
     const times = schedules.filter(schedule => schedule.slot_id === slot && schedule.enabled).sort((a, b) => a.hour * 60 + a.minute - b.hour * 60 - b.minute);
-    return '<article class="slot-card"><div class="slot-top"><span class="slot-number">0' + slot + ' / NGĂN ' + slot +
+    return '<article class="slot-card' + (selectedSlot === slot ? ' selected' : '') + '"><button type="button" class="slot-select" data-select-slot="' + slot + '" aria-label="Xem ngăn ' + slot + ' trên mô hình"><div class="slot-top"><span class="slot-number">0' + slot + ' / NGĂN ' + slot +
       '</span><span class="tag ' + (assignment ? 'neutral' : 'warning') + '">' + (assignment ? 'Đã gán' : 'Trống') +
       '</span></div><h3>' + esc(assignment?.medication_name || assignment?.medication_code || 'Chưa gán') + '</h3><p>' +
       esc(assignment?.medication_code || '—') + '</p><div>' +
-      times.map(schedule => '<span class="slot-time' + (schedule.schedule_id === next?.schedule_id ? ' next' : '') + '">' + scheduleTime(schedule) + '</span>').join('') + '</div></article>';
+      times.map(schedule => '<span class="slot-time' + (schedule.schedule_id === next?.schedule_id ? ' next' : '') + '">' + scheduleTime(schedule) + '</span>').join('') + '</div></button></article>';
   }).join('');
   $('#schedules').innerHTML = schedules.map(schedule => '<tr><td><strong>' + esc(schedule.schedule_id) + '</strong></td><td>Ngăn ' +
     schedule.slot_id + '</td><td>' + esc(schedule.medication_name || schedule.medication_code) + '<small>' + esc(schedule.medication_code) + '</small></td><td><strong>' + scheduleTime(schedule) +
@@ -312,11 +347,13 @@ async function loadHistory(force = false) {
   finally { historyLoading = false; }
 }
 function renderSession(session) {
+  $('#settings-open').hidden=Boolean(session.demo_admin);
+  if(session.demo_admin && $('#settings-dialog').open)$('#settings-dialog').close();
   $('#session').textContent = session.auth_enabled
     ? session.identity.actor_id + ' · ' + roleLabels[session.identity.role] : 'Không yêu cầu khóa truy cập.';
   caregiver = !session.auth_enabled || ['nurse', 'admin'].includes(session.identity.role);
   $('#settings-open').textContent = session.auth_enabled
-    ? session.identity.actor_id + ' · ' + roleLabels[session.identity.role] : 'Tài khoản · Chưa bật xác thực';
+    ? session.identity.actor_id + ' · ' + roleLabels[session.identity.role] : 'Tài khoản';
   $('#settings-open').title = $('#session').textContent;
   if ($('#simulator-panel')) $('#simulator-panel').hidden = !session.local_simulation || !caregiver;
   document.querySelectorAll('.caregiver-control').forEach(button => { button.hidden = !caregiver; });
@@ -361,6 +398,12 @@ async function load() {
       $('#device').value = device;
     }
     currentSlots = slots;
+    latestSnapshot = snapshot;
+    const deviceScan=snapshot.barcode_scan;
+    $('#device-scan-status').textContent=deviceScan ? 'Mã từ mạch '+device+' · '+deviceScan.barcode+' · '+dateTime(deviceScan.received_at) : 'Chưa có mã quét từ mạch.';
+    $('#use-device-scan').hidden=!deviceScan||!caregiver;
+    updateSelectedSlot();
+    window.pillboxModel?.update(snapshot);
     const current = snapshot.device;
     renderChanged('devices', devices, () => renderDevices(devices, current));
     renderChanged('schedules', [schedules, slots, current.device_local_minute, Math.floor(Date.now()/60000)], () => renderSchedules(schedules, slots, current));
@@ -458,11 +501,219 @@ async function confirmRefill() {
   load();
 }
 
+let simVerified='',simVersion=0,simCount=[0,0,0];
+function simContext(){return JSON.stringify([selected(),selectedSlot,currentSlots.find(x=>x.slot_id===selectedSlot)?.medication_code,$('#play-code').value.trim()]);}
+function refreshProductPlay(){
+  const slot=currentSlots.find(x=>x.slot_id===selectedSlot);
+  $('#play-title').textContent='Ngăn kéo '+selectedSlot;
+  $('#play-assignment').textContent=slot ? (slot.medication_name||slot.medication_code)+' · '+slot.medication_code : 'Ngăn chưa được gán thuốc. Chọn một ngăn đã có thuốc để thử nạp.';
+  $('#play-package-name').textContent=slot?.medication_name||'Bao bì thuốc';
+  $('#play-drawer').textContent=window.pillboxModel?.isLidOpen(selectedSlot)?'Đẩy ngăn vào':'Kéo ngăn ra';
+  $('#play-add').disabled=simVerified!==simContext()||!window.pillboxModel?.isLidOpen(selectedSlot);
+  $('#play-inventory').textContent='Trong mô phỏng: '+simCount[selectedSlot-1]+' / 12 viên ở ngăn '+selectedSlot+'.';
+}
+function openProductPlay(action='help'){
+  if(action==='silence'){window.pillboxModel?.setScenario('muted');return;}
+  simVersion++;simVerified='';
+  $('#play-code').value=currentSlots.find(x=>x.slot_id===selectedSlot)?.medication_code||'';
+  $('#play-result').textContent='';
+  $('#play-instruction').textContent=action==='scan'?'1. Xem mã trên bao bì. 2. Đưa bao bì vào cửa BARCODE. 3. Kiểm tra thuốc khớp với ngăn đã chọn.':'Kéo ngăn ra, quét mã bao bì cho đúng thuốc, rồi thêm viên vào ngăn. Màn hình trên hộp sẽ cập nhật số viên mô phỏng.';
+  refreshProductPlay();if(!$('#product-play').open)$('#product-play').showModal();
+}
+$('#product-help').addEventListener('click',()=>openProductPlay());
+$('#play-close').addEventListener('click',()=>$('#product-play').close());
+$('#play-next').addEventListener('click',()=>{selectSlot(selectedSlot%3+1);openProductPlay();});
+$('#play-drawer').addEventListener('click',()=>{window.pillboxModel?.toggleLid(selectedSlot);refreshProductPlay();updateSelectedSlot();});
+$('#play-code').addEventListener('input',()=>{simVerified='';simVersion++;$('#play-add').disabled=true;});
+$('#play-scan').addEventListener('click',async()=>{
+  simVerified='';$('#play-add').disabled=true;
+  const context=simContext(),version=++simVersion,code=$('#play-code').value.trim();
+  if(!validBarcode(code)){$('#play-result').textContent='Mã chưa hợp lệ. Kiểm tra lại bao bì.';return;}
+  window.pillboxModel?.scanPackage();$('#play-result').textContent='Đang đọc mã trên bao bì…';
+  try {
+    const medication=await api('/api/medications/barcodes/'+encodeURIComponent(code));
+    if(version!==simVersion||context!==simContext())return;
+    const slot=currentSlots.find(x=>x.slot_id===selectedSlot);
+    if(!slot||slot.medication_code!==medication.medication_code){$('#play-result').textContent='Sai thuốc cho ngăn này. Chọn đúng ngăn hoặc kiểm tra mã bao bì.';window.pillboxModel?.setScenario('alert');return;}
+    simVerified=context;$('#play-result').textContent='Đã nhận diện '+medication.medication_name+'. '+(window.pillboxModel?.isLidOpen(selectedSlot)?'Có thể thêm thuốc vào ngăn.':'Kéo ngăn ra trước khi thêm thuốc.');window.pillboxModel?.setBarcodeResult('Mã đúng • '+medication.medication_code);refreshProductPlay();
+  }catch(error){if(version===simVersion)$('#play-result').textContent=error.status===404?'Không có mã này trong danh mục. Không thêm thuốc vào mô phỏng.':error.message;}
+});
+$('#play-add').addEventListener('click',()=>{
+  if(simVerified!==simContext()||!window.pillboxModel?.isLidOpen(selectedSlot))return;
+  const count=Number($('#play-quantity').value);
+  if(!Number.isInteger(count)||count<1||count>12||simCount[selectedSlot-1]+count>12){$('#play-result').textContent='Nhập số nguyên từ 1 đến '+(12-simCount[selectedSlot-1])+', theo chỗ trống của ngăn mô phỏng.';return;}
+  simCount[selectedSlot-1]=window.pillboxModel?.addPills(selectedSlot,count)||0;
+  window.pillboxModel?.setBarcodeResult('Đã thêm • '+simCount[selectedSlot-1]+' viên mô phỏng');
+  simVerified='';refreshProductPlay();$('#product-play').close();
+});
+$('#play-camera').addEventListener('click',()=>{$('#product-play').close();boxAction('scan');});
+for(const [id,scenario] of [['play-remind','remind'],['play-alert','alert'],['play-mute','muted']])$('#'+id).addEventListener('click',()=>{window.pillboxModel?.setScenario(scenario);$('#product-play').close();});
+document.querySelectorAll('[data-play-drawer]').forEach(button=>button.addEventListener('click',()=>{selectSlot(button.dataset.playDrawer);window.pillboxModel?.toggleLid(selectedSlot);updateSelectedSlot();}));
+document.querySelectorAll('[data-play-action]').forEach(button=>button.addEventListener('click',()=>openProductPlay(button.dataset.playAction)));
+let scannerStream = null, scannerFrame = 0, scannerBusy = false, scannerDetector = null, lastScanAt = 0;
+function stopScanner() {
+  if (scannerFrame) cancelAnimationFrame(scannerFrame);
+  scannerFrame = 0;
+  scannerBusy = false;
+  if (scannerStream) scannerStream.getTracks().forEach(track => track.stop());
+  scannerStream = null;
+  $('#scanner-video').srcObject = null;
+  $('#scanner-view').hidden = true;
+  $('#scanner-stop').hidden = true;
+  $('#scanner-start').hidden = false;
+}
+async function startScanner() {
+  if (!caregiver) return;
+  if (!('BarcodeDetector' in window)) {
+    $('#scanner-result').textContent = 'Trình duyệt này chưa hỗ trợ quét mã vạch. Hãy nhập mã từ bao bì.';
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    $('#scanner-result').textContent = 'Camera không khả dụng. Hãy dùng HTTPS hoặc nhập mã thủ công.';
+    return;
+  }
+  try {
+    const supported = await BarcodeDetector.getSupportedFormats();
+    const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'].filter(format => supported.includes(format));
+    if (!formats.length) throw new Error('Trình duyệt không hỗ trợ định dạng mã vạch cần dùng.');
+    scannerDetector = new BarcodeDetector({ formats });
+    scannerStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }, audio: false });
+    const video = $('#scanner-video');
+    video.srcObject = scannerStream;
+    await video.play();
+    if (currentView !== 'refill' || document.visibilityState !== 'visible') { stopScanner(); return; }
+    $('#scanner-view').hidden = false;
+    $('#scanner-stop').hidden = false;
+    $('#scanner-start').hidden = true;
+    $('#scanner-result').textContent = 'Đưa mã vạch vào khung quét và giữ bao bì ổn định.';
+    async function scan() {
+      if (!scannerStream || currentView !== 'refill' || document.visibilityState !== 'visible') return;
+      if (!scannerBusy && video.readyState >= 2 && performance.now() - lastScanAt >= 250) {
+        scannerBusy = true;
+        lastScanAt = performance.now();
+        try {
+          const detections = await scannerDetector.detect(video);
+          const value = detections[0]?.rawValue?.trim();
+          if (value) {
+            $('#barcode').value = value;
+            stopScanner();
+            lookupBarcode();
+            return;
+          }
+        } catch (error) { $('#scanner-result').textContent = 'Không đọc được khung hình. Hãy thử lại hoặc nhập mã thủ công.'; }
+        finally { scannerBusy = false; }
+      }
+      scannerFrame = requestAnimationFrame(scan);
+    }
+    scannerFrame = requestAnimationFrame(scan);
+  } catch (error) {
+    stopScanner();
+    $('#scanner-result').textContent = error.name === 'NotAllowedError' ? 'Camera bị từ chối quyền truy cập. Hãy cho phép camera hoặc nhập mã thủ công.' : error.message;
+  }
+}
+function validBarcode(value) {
+  if (!/^[\x20-\x7e]{4,48}$/.test(value)) return false;
+  if (!/^\d{8}$|^\d{12}$|^\d{13}$/.test(value)) return true;
+  const checksum = number => {
+    const digits = [...number].map(Number);
+    const sum = digits.slice(0, -1).reverse().reduce((total, digit, index) => total + digit * (index % 2 ? 1 : 3), 0);
+    return (10 - sum % 10) % 10 === digits.at(-1);
+  };
+  if (checksum(value)) return true;
+  if (value.length !== 8 || !/^[01]/.test(value)) return false;
+  const [ns, a, b, c, d, e, f, check] = value;
+  const expanded = '012'.includes(f) ? ns + a + b + f + '00' + '00' + c + d + e + check :
+    f === '3' ? ns + a + b + c + '00' + '000' + d + e + check :
+    f === '4' ? ns + a + b + c + d + '0' + '0000' + e + check :
+    ns + a + b + c + d + e + '0000' + f + check;
+  return checksum(expanded);
+}
+async function lookupBarcode() {
+  const barcode = $('#barcode').value.trim();
+  $('#barcode-info').hidden = true;
+  $('#barcode-info').replaceChildren();
+  if (!validBarcode(barcode)) {
+    $('#scanner-result').textContent = 'Mã vạch không hợp lệ. Kiểm tra lại số hoặc ký tự trên bao bì.';
+    window.pillboxModel?.setBarcodeResult('Mã không hợp lệ');
+    return;
+  }
+  $('#scanner-result').textContent = 'Đang tra cứu mã vạch trong danh mục nội bộ…';
+  try {
+    const item = await api('/api/medications/barcodes/' + encodeURIComponent(barcode));
+    const assignment = currentSlots.find(slot => slot.slot_id === Number($('#slot').value));
+    const matched = assignment?.medication_code === item.medication_code;
+    const rows = [
+      ['Tên thuốc', item.medication_name], ['Mã thuốc', item.medication_code],
+      ['Mã vạch', item.barcode], ['Hàm lượng', item.strength],
+      ['Dạng bào chế', item.dosage_form], ['Nhà sản xuất', item.manufacturer],
+      ['Mô tả', item.description]
+    ].filter(([, value]) => value);
+    $('#barcode-info').innerHTML = rows.map(([label, value]) => '<div><strong>' + esc(label) + '</strong><br>' + esc(value) + '</div>').join('');
+    const use = document.createElement('button');
+    use.type = 'button'; use.className = 'button secondary';
+    use.textContent = 'Dùng mã thuốc này';
+    use.addEventListener('click', () => {
+      $('#medication').value = item.medication_code;
+      $('#medication').dispatchEvent(new Event('input', { bubbles: true }));
+      message('#refill-result', 'Đã điền mã thuốc. Kiểm tra thông tin rồi chọn Xác minh mã.');
+    });
+    $('#barcode-info').append(use);
+    $('#barcode-info').hidden = false;
+    $('#scanner-result').textContent = matched ? 'Đã tìm thấy thuốc phù hợp với ngăn đã chọn. Hãy kiểm tra bao bì và xác minh.' : 'Đã tìm thấy thuốc, nhưng mã không khớp với ngăn đã chọn.';
+    window.pillboxModel?.setBarcodeResult(matched ? 'Mã phù hợp' : 'Sai ngăn');
+  } catch (error) {
+    $('#scanner-result').textContent = error.status === 404 ? 'Không tìm thấy mã vạch trong danh mục nội bộ. Hãy nhập mã thuốc được gán cho ngăn để xác minh.' : error.message;
+    window.pillboxModel?.setBarcodeResult(error.status === 404 ? 'Không nhận diện' : 'Lỗi tra cứu');
+  }
+}
+$('#scanner-start').addEventListener('click', startScanner);
+$('#scanner-stop').addEventListener('click', stopScanner);
+$('#barcode-lookup').addEventListener('click', lookupBarcode);
+$('#use-device-scan').addEventListener('click',()=>{
+  if(!caregiver||!latestSnapshot?.barcode_scan)return;
+  $('#barcode').value=latestSnapshot.barcode_scan.barcode;lookupBarcode();
+});
+$('#barcode').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); lookupBarcode(); } });
+window.addEventListener('pagehide', stopScanner);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') stopScanner(); });
+
 document.addEventListener('click', event => {
+  const slotButton = event.target.closest('[data-select-slot]');
+  if (slotButton) { selectSlot(slotButton.dataset.selectSlot); return; }
   const button = event.target.closest('[data-page-list]');
   if (!button || button.disabled || !(button.dataset.pageList in listPages)) return;
   listPages[button.dataset.pageList] = Number(button.dataset.page);
   load();
+});
+$('#pillbox-3d').addEventListener('pillbox:select', event => selectSlot(event.detail.slot, true));
+$('#pillbox-3d').addEventListener('pillbox:lid',updateSelectedSlot);
+function boxAction(action) {
+  if(!caregiver) { $('#box-feedback').textContent='Tài khoản gia đình chỉ được theo dõi hộp thuốc.';return; }
+  if(action==='scan'||action==='refill') {
+    if(Number($('#slot').value)!==selectedSlot) {resetVerification(true);$('#slot').value=String(selectedSlot);renderRefillContext();}
+    showView('refill');
+    document.querySelector(action==='scan'?'#scanner-start':'#medication').focus();
+    if(action==='scan') startScanner();
+  } else if(action==='silence') {
+    api('/api/devices/'+encodeURIComponent(selected())+'/commands',{command:'CLEAR_ALERT'}).then(()=>{$('#box-feedback').textContent='Đã gửi yêu cầu tắt âm và đèn. Chờ thiết bị phản hồi ở mục Thiết bị.';load();}).catch(error=>{$('#box-feedback').textContent=error.message;});
+  }
+}
+$('#pillbox-3d').addEventListener('pillbox:action',event=>openProductPlay(event.detail.action));
+$('#box-scan').addEventListener('click',()=>boxAction('scan'));
+$('#box-refill').addEventListener('click',()=>boxAction('refill'));
+$('#box-mute').addEventListener('click',()=>boxAction('silence'));
+$('#box-record-open').addEventListener('click',async()=>{
+  if(!latestSnapshot?.session.local_simulation||!caregiver)return;
+  try{await api('/api/simulator/action',{box_id:selected(),action:'open'+selectedSlot});$('#box-feedback').textContent='Simulator đã ghi nhận mở ngăn '+selectedSlot+'. Kiểm tra trạng thái phiên nạp trước khi xác nhận.';load();}catch(error){$('#box-feedback').textContent=error.message;}
+});
+function updateBoxClock(){ $('#box-clock').textContent=new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date()); }
+updateBoxClock();setInterval(updateBoxClock,1000);
+window.addEventListener('pillbox:model-ready', () => { if (latestSnapshot) window.pillboxModel.update(latestSnapshot); window.pillboxModel.select(selectedSlot); });
+$('#model-reset').addEventListener('click', () => window.pillboxModel?.reset());
+$('#virtual-lid').addEventListener('click', () => {
+  if (!window.pillboxModel) { message('#error', 'Mô hình 3D chưa sẵn sàng.'); return; }
+  const open = window.pillboxModel.toggleLid(selectedSlot);
+  $('#virtual-lid').textContent = open ? 'Đẩy ngăn vào' : 'Kéo ngăn ra';
 });
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => showView(button.dataset.view)));
 window.addEventListener('hashchange', () => showView(location.hash.slice(1), false));
@@ -473,6 +724,11 @@ $('#device').addEventListener('change', () => {
   lastCommandId = null;
   for (const name of Object.keys(listPages)) listPages[name] = 1;
   currentSlots = []; renderCache.clear();
+  latestSnapshot = null; selectedSlot = 1;
+  simVerified='';simCount=[0,0,0];simVersion++;
+  $('#product-play').close();window.pillboxModel?.resetSimulation();
+  window.pillboxModel?.closeAll();
+  window.pillboxModel?.setBarcodeResult('');
   $('#patient').value = knownDevices.find(device => device.device_id === selected())?.patient_id || '';
   renderRefillContext();
   load();

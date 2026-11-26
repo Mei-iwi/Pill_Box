@@ -21,6 +21,7 @@ public:
     void publishEnvironment(float temperatureC, float humidityPercent, bool sensorOk, uint32_t sampledEpoch, uint32_t sequence, const char* storageStatus = "PENDING");
     void publishHeartbeat(const char* state, uint32_t sequence, uint16_t minute = 1440, uint32_t epoch = 0);
     void publishStatus(const char* state, uint32_t sequence);
+    void setBarcode(const char* value);
     void publishCommandResult(const char* commandId, const char* command, bool accepted, const Schedule* schedules, uint8_t count, const char* refillSession = nullptr);
     void dispatchCommand(const char* payload);
 private:
@@ -29,6 +30,8 @@ private:
     void* context_ = nullptr;
     unsigned long lastAttempt_ = 0;
     char bootId_[24] = {};
+    char barcode_[49] = {};
+    uint32_t barcodeSequence_ = 0;
     struct Pending { char topic[80]; char payload[1024]; };
     EventBuffer<Pending,16> queue_;
     EventBuffer<Pending,4> telemetry_;

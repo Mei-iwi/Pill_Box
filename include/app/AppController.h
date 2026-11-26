@@ -6,6 +6,7 @@
 #include "drivers/LedDriver.h"
 #include "drivers/BuzzerDriver.h"
 #include "drivers/EnvironmentDriver.h"
+#include "drivers/ProductPanel.h"
 #include "storage/SettingsStore.h"
 #include "communication/WifiManager.h"
 #include "communication/MqttClient.h"
@@ -25,6 +26,7 @@ private:
     LedDriver leds_;
     BuzzerDriver buzzer_;
     EnvironmentDriver environment_;
+    ProductPanel panel_;
     SettingsStore settings_;
     StoredSettings stored_{};
     WifiManager wifi_;

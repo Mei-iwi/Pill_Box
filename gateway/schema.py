@@ -12,6 +12,14 @@ CREATE TABLE IF NOT EXISTS schedules (
     late_tracking_window_minutes INTEGER NOT NULL DEFAULT 120
 );
 CREATE TABLE IF NOT EXISTS medication_catalog (medication_code TEXT PRIMARY KEY, label TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS device_barcode_scans (
+    device_id TEXT PRIMARY KEY, scan_id TEXT NOT NULL, barcode TEXT NOT NULL, received_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS medication_barcodes (
+    barcode TEXT PRIMARY KEY, medication_code TEXT NOT NULL,
+    strength TEXT, dosage_form TEXT, manufacturer TEXT, description TEXT,
+    FOREIGN KEY (medication_code) REFERENCES medication_catalog(medication_code)
+);
 CREATE TABLE IF NOT EXISTS slot_assignments (
     device_id TEXT NOT NULL, slot_id INTEGER NOT NULL, patient_id TEXT NOT NULL,
     medication_code TEXT NOT NULL, PRIMARY KEY (device_id, slot_id)

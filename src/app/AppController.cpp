@@ -15,6 +15,7 @@ void AppController::begin() {
     Serial.begin(115200);
 #endif
     rtc_.begin();
+    panel_.begin();
     buttons_.begin();
     leds_.begin();
     buzzer_.begin();
@@ -65,11 +66,15 @@ void AppController::update() {
         }
     }
     const ClockTime now = rtc_.now();
+    panel_.update(now.minuteOfDay,now.second,state_,mqtt_.connected(),scheduler_.schedules());
+    char scanned[49];
+    if(panel_.takeScan(scanned,sizeof(scanned))){mqtt_.setBarcode(scanned);statusDirty_=true;Serial.println("Barcode captured; review in dashboard. Refill is not authorized.");}
     scheduler_.update(now.dayKey, now.minuteOfDay, now.epoch);
     while (true) { SchedulerEvent event; if (!scheduler_.takeEvent(event)) break; handleEvent(event); }
 
     for (uint8_t slot = 1; slot <= 3; ++slot) {
         if (buttons_.wasPressed(slot)) {
+            panel_.select(slot);
             if (refillWindow_.allows(slot,static_cast<uint32_t>(time(nullptr)),millis())) {
                 SchedulerEvent event{EventType::REFILL_OPEN,slot,"REFILL",now.minuteOfDay,now.minuteOfDay,0,now.dayKey,now.epoch,now.epoch};
                 mqtt_.publishEvent(event,++sequence_,state_,refillWindow_.id());

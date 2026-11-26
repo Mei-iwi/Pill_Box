@@ -30,12 +30,16 @@ def configure_auth(app, test_config):
             ):
                 raise ValueError("Invalid configured auth identity")
     app.config["AUTH_IDENTITIES"] = identities
+    app.config["LOCAL_DEMO_ADMIN"] = bool((test_config or {}).get("LOCAL_DEMO_ADMIN", False))
     if os.getenv("PILLBOX_DEPLOYMENT") == "care" and identities is None:
         raise ValueError("care deployment requires PILLBOX_AUTH_FILE")
 
     @app.before_request
     def authorize():
         g.identity = None
+        if app.config["LOCAL_DEMO_ADMIN"] and request.remote_addr in ("127.0.0.1", "::1"):
+            g.identity = {"actor_id": "ADMIN01", "role": "admin", "devices": []}
+            return None
         if not request.path.startswith("/api/") or identities is None:
             return None
         authorization = request.headers.get("Authorization", "")

@@ -77,10 +77,27 @@ try {
   await until("document.querySelectorAll('#slots .slot-card').length===3");
   assert(await evaluate("document.querySelector('#error').hidden"), 'Dashboard API error');
   assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Desktop overflow');
-  assert.equal(await evaluate("document.querySelectorAll('body svg,.footer,.brand-caption,.hero-description,.eyebrow').length"),0,'Unwanted descriptions/icons');
-  assert.equal(await evaluate("getComputedStyle(document.querySelector('#hero-title')).color"),'rgb(0, 0, 0)');
-  assert.equal(await evaluate("getComputedStyle(document.querySelector('.primary')).backgroundColor"),'rgb(7, 87, 237)');
-  await until("document.querySelector('.hero-art img').complete && document.querySelector('.hero-art img').naturalWidth>0");
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('.primary')).backgroundColor"),'rgb(32, 94, 74)');
+  await until('Boolean(window.pillboxModel)');
+  assert(await evaluate("document.querySelector('#box-clock').textContent.match(/\\d{2}:\\d{2}:\\d{2}/) !== null"), 'Product clock not running');
+  await evaluate("document.querySelector('[data-select-slot=\"3\"]').click();document.querySelector('#box-refill').click()");
+  assert(await evaluate("!document.querySelector('#view-refill').hidden && document.querySelector('#slot').value==='3'"), 'Product refill button selected wrong compartment');
+  await evaluate("document.querySelector('[data-view=overview]').click()");
+  assert(await evaluate("document.querySelector('#pillbox-3d canvas')?.width > 0"), '3D model did not render');
+  await evaluate("document.querySelector('[data-select-slot=\"2\"]').click()");
+  assert(await evaluate("document.querySelector('#selected-medication').textContent.includes('Vitamin D3')"), 'Compartment selection did not update');
+  await evaluate("document.querySelector('#virtual-lid').click()");
+  assert(await evaluate("document.querySelector('#virtual-lid').textContent.includes('Đẩy ngăn')"), 'Drawer did not open');
+  await evaluate('window.scrollTo(0,0)');
+  await screenshot('.pio/ui-lid-open.png');
+  await evaluate("document.querySelector('#virtual-lid').click();document.querySelector('[data-select-slot=\"1\"]').click()");
+  await evaluate("document.querySelector('[data-view=refill]').click();document.querySelector('#barcode').value='MED001';document.querySelector('#barcode-lookup').click()");
+  await until("!document.querySelector('#barcode-info').hidden");
+  assert(await evaluate("document.querySelector('#barcode-info').textContent.includes('Vitamin C')"), 'Barcode did not identify catalog entry');
+  assert(await evaluate("document.querySelector('#authorize-refill').disabled"), 'Barcode lookup authorized a refill');
+  await evaluate('window.scrollTo(0,0)');
+  await screenshot('.pio/ui-refill.png');
+  await evaluate("document.querySelector('[data-view=overview]').click()");
   assert.equal(await evaluate("fetch(document.querySelector('link[rel=icon]').href).then(r=>r.status)"),200);
   await screenshot('.pio/ui-desktop.png');
   // Measure browser polling independently of firmware/network latency.
@@ -224,21 +241,31 @@ try {
   await evaluate("document.querySelector('#device').value='PB02';document.querySelector('#device').dispatchEvent(new Event('change'))");
   await until("document.querySelector('#hero-device').textContent==='PB02'");
   assert.equal(await evaluate("document.querySelector('#patient').value"), 'P002');
+  assert(await evaluate("document.querySelector('#selected-medication').textContent.includes('Vitamin B12')"), '3D inspection data did not follow device change');
   assert(await evaluate("document.querySelector('#confirm').disabled"));
   await evaluate("document.querySelector('#device').value='PB01';document.querySelector('#device').dispatchEvent(new Event('change'))");
   await until("document.querySelector('#hero-device').textContent==='PB01'");
   await evaluate("document.querySelector('[data-view=overview]').click()");
   await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Mobile overflow');
+  await evaluate("document.querySelector('[data-view=devices]').click()");
   await checkStickyBars();
+  await evaluate("document.querySelector('[data-view=overview]').click()");
   await screenshot('.pio/ui-mobile.png');
   for (const view of ['schedules', 'history', 'refill', 'devices']) {
     await evaluate(`document.querySelector('[data-view="${view}"]').click()`);
     assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Mobile overflow: ' + view);
   }
+  for (const width of [320, 768, 1024, 1440]) {
+    await call('Emulation.setDeviceMetricsOverride', { width, height: width < 600 ? 720 : 900, deviceScaleFactor: 1, mobile: width < 600 });
+    for (const view of ['overview', 'schedules', 'history', 'refill', 'devices']) {
+      await evaluate(`document.querySelector('[data-view="${view}"]').click()`);
+      assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), `${width}px overflow: ${view}`);
+    }
+  }
   assert.deepEqual(errors, [], 'Browser JavaScript exception');
-  console.log('UI_SMOKE_PASS: desktop/mobile, fixed submenu on scroll, real photos/favicon, black text/blue buttons, removed copy/icons, 4 paginated lists (fixture GETs), authorized refill (stub POSTs), central alert resolve (fixture), no overflow/JS exceptions. Live requests read-only.');
-  console.log('Screenshots: .pio/ui-desktop.png, .pio/ui-mobile.png');
+  console.log('UI_SMOKE_PASS: 320/390/768/1024/1440px, fixed submenu, 3D selection and virtual lid, 4 paginated lists (fixture GETs), authorized refill (stub POSTs), central alert resolve (fixture), no overflow/JS exceptions. Live requests read-only.');
+  console.log('Screenshots: .pio/ui-desktop.png, .pio/ui-mobile.png, .pio/ui-lid-open.png, .pio/ui-refill.png');
 } finally {
   socket.close();
 }

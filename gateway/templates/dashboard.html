@@ -1,14 +1,18 @@
 <!doctype html>
-<html lang="vi">
+<html lang="vi" data-type="software" data-radius="soft" data-buttons="solid" data-motion="quiet">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#0757ed">
-  <title>Pillbox</title>
+  <meta name="theme-color" content="#f5f6f1">
+  <meta name="page-type" content="software">
+  <meta name="site-kind" content="software">
+  <meta name="description" content="Theo dõi hộp thuốc, lịch nhắc, môi trường bảo quản và quy trình nạp thuốc đã xác minh.">
+  <title>Pillbox · Theo dõi hộp thuốc thông minh</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Bỏ qua điều hướng</a>
 
   <header class="topbar">
     <a class="brand" href="#overview" aria-label="Pillbox — Tổng quan">Pillbox</a>
@@ -26,36 +30,18 @@
     <label class="device-picker"><span>Hộp thuốc</span><select id="device" aria-label="Chọn hộp thuốc"><option>PB01</option><option>PB02</option></select></label>
   </div>
 
-  <main class="workspace">
+  <main class="workspace" id="main-content">
     <p id="error" class="notice error-notice" role="alert" hidden></p>
-    <section id="alerts-panel" class="surface section-block standalone care-alerts" hidden aria-live="polite">
-      <div class="section-heading"><h2>Cảnh báo cần xử lý</h2></div><div id="care-alerts"></div>
-      <nav id="alerts-pagination" class="pagination" aria-label="Phân trang cảnh báo"></nav>
-    </section>
-    <div id="view-overview" class="view">
-      <div class="surface overview-surface">
-        <section class="hero" aria-labelledby="hero-title">
-          <div class="hero-copy">
-            <h1 id="hero-title">Hộp thuốc<br>của bạn.</h1>
-            <div class="hero-actions"><button class="button primary" data-view="schedules">Xem lịch nhắc</button><button class="text-button caregiver-control" data-view="refill">Nạp thuốc</button></div>
-            <div class="hero-meta"><span id="hero-device">PB01</span><span class="meta-divider"></span><span id="hero-patient">Người dùng P001</span><span id="hero-state" class="state-text">Đang tải…</span></div>
-          </div>
-          <div class="hero-art"><img src="/static/images/pill-organizer.jpg" alt="Hộp chia thuốc" width="1400" height="933" fetchpriority="high"></div>
-        </section>
-        <section class="metrics" aria-label="Thông tin nhanh">
-          <article class="metric"><span class="metric-label">Lịch nhắc tiếp theo</span><strong id="next-time">—</strong><span id="next-reminder" class="metric-note">Đang tải lịch nhắc</span></article>
-          <article class="metric"><span class="metric-label">Ngăn đã được gán</span><strong id="assigned-count">—<small>/ 3 ngăn</small></strong><span id="assignment-note" class="metric-note">Đang tải thông tin</span></article>
-          <article class="metric"><span class="metric-label">Môi trường bảo quản</span><strong id="environment-value">—</strong><span id="environment-status" class="metric-note">Chưa có dữ liệu cảm biến</span></article>
-        </section>
-        <section class="section-block">
-          <div class="section-heading"><div><h2>Ngăn thuốc</h2></div></div>
-          <div id="slots" class="slot-grid"><p class="empty">Đang tải các ngăn thuốc…</p></div>
-        </section>
-        <section class="section-block activity-section">
-          <div class="section-heading"><h2>Hoạt động gần đây</h2><button class="text-button" data-view="history">Xem tất cả</button></div>
-          <div id="recent-events"><p class="empty">Chưa có hoạt động.</p></div>
-        </section>
-      </div>
+    <div id="view-overview" class="view product-only">
+      <section class="product-stage drawer-stage" id="overview" aria-label="Hộp thuốc ngăn kéo tương tác">
+        <h1 class="sr-only" id="hero-title">Mô phỏng hộp thuốc ngăn kéo</h1>
+        <div class="product-heading"><span>Pillbox / 03</span><span class="simulation-label">Mô phỏng thao tác</span></div>
+        <div id="pillbox-3d" class="pillbox-3d" role="img" aria-label="Hộp thuốc ba ngăn kéo, màn hình và nút trên mặt hộp"></div>
+        <div class="product-help">Bấm ngăn kéo để mở · Bấm nút trên mặt hộp để thao tác</div>
+        <div class="stage-tools"><button id="model-reset" type="button" class="stage-button">Đặt lại góc nhìn</button><button id="product-help" class="stage-button" type="button">Cách sử dụng</button></div>
+        <div class="product-access" aria-label="Điều khiển hộp thuốc bằng bàn phím"><button data-play-drawer="1">Ngăn 1</button><button data-play-drawer="2">Ngăn 2</button><button data-play-drawer="3">Ngăn 3</button><button data-play-action="scan">Quét mã</button><button data-play-action="refill">Thêm thuốc</button><button data-play-action="silence">Tắt báo</button></div>
+        <p id="model-fallback" class="model-fallback" hidden>Trình duyệt không hỗ trợ 3D. Dùng các nút điều khiển để thử thao tác.</p>
+      </section>
     </div>
 
     <div id="view-schedules" class="view" hidden>
@@ -74,8 +60,17 @@
     <div id="view-refill" class="view" hidden>
       <div class="page-heading"><div><h1>Nạp thuốc</h1></div><span class="tag neutral">Xác minh → Xác nhận</span></div>
       <section id="refill-panel" class="surface section-block standalone">
-        <img class="refill-photo" src="/static/images/medication-container.jpg" alt="Hộp đựng và sắp xếp thuốc" width="1200" height="800" loading="lazy">
-        <div class="section-heading"><div><h2>Xác minh thuốc</h2></div></div>
+        <div class="section-heading"><div><span class="eyebrow">Quy trình nạp thuốc</span><h2>Xác minh thuốc và ngăn</h2></div></div>
+        <ol class="refill-steps"><li>Chọn ngăn</li><li>Kiểm tra mã thuốc</li><li>Chờ thiết bị xác nhận</li><li>Xác nhận nạp</li></ol>
+        <div class="scanner-panel">
+          <div><h3>Quét mã vạch trên bao bì</h3><p>Quét mã để tra cứu thông tin đã được gắn với danh mục nội bộ. Bạn vẫn cần xác minh mã thuốc trước khi nạp.</p></div>
+          <div class="scanner-actions"><button id="scanner-start" class="button secondary" type="button">Mở máy quét</button><button id="scanner-stop" class="text-button" type="button" hidden>Đóng máy quét</button></div>
+          <div id="scanner-view" class="scanner-view" hidden><video id="scanner-video" autoplay muted playsinline aria-label="Hình ảnh từ camera quét mã vạch"></video><span class="scan-frame" aria-hidden="true"></span></div>
+          <label class="barcode-field">Mã vạch trên bao bì<input id="barcode" autocomplete="off" placeholder="Nhập EAN, UPC hoặc Code 128"></label>
+          <div class="scanner-actions"><button id="barcode-lookup" class="button secondary" type="button">Tra cứu mã vạch</button><p id="scanner-result" class="scanner-result" role="status" aria-live="polite">Chưa quét mã vạch.</p></div>
+          <div id="barcode-info" class="barcode-info" hidden></div>
+          <div class="device-scan-review"><p id="device-scan-status">Chưa có mã quét từ mạch.</p><button type="button" class="button secondary" id="use-device-scan" hidden>Tra cứu mã từ mạch</button></div>
+        </div>
         <form id="refill-form" onsubmit="verifyRefill(event)">
           <div class="form-grid"><label id="actor-field">Mã người chăm sóc<input id="actor" value="NURSE01" required autocomplete="off"></label><label>Mã người dùng<input id="patient" value="P001" required autocomplete="off"></label><label>Ngăn thuốc<select id="slot"><option value="1">Ngăn 1</option><option value="2">Ngăn 2</option><option value="3">Ngăn 3</option></select></label><label>Mã trên bao bì<input id="medication" placeholder="Nhập hoặc quét mã" required autocomplete="off"></label></div>
           <div id="refill-context" class="refill-context">Hộp PB01 · Ngăn 1 · MED001</div>
@@ -88,6 +83,10 @@
     </div>
 
     <div id="view-devices" class="view" hidden>
+    <section id="alerts-panel" class="surface section-block standalone care-alerts" hidden aria-live="polite">
+      <div class="section-heading"><h2>Cảnh báo cần xử lý</h2></div><div id="care-alerts"></div>
+      <nav id="alerts-pagination" class="pagination" aria-label="Phân trang cảnh báo"></nav>
+    </section>
       <div class="page-heading"><div><h1>Thiết bị</h1></div></div>
       {% if config.get('LOCAL_SIMULATION') %}
       <section id="simulator-panel" class="surface section-block standalone simulator-panel" hidden>
@@ -106,13 +105,52 @@
         </div><p id="simulator-result" class="inline-message" role="status" hidden></p>
       </section>
       {% endif %}
+      <section class="surface standalone device-details">
+        <div class="hero-meta"><span id="hero-device">PB01</span><span id="hero-patient">Đang tải</span><span id="hero-state">Đang tải</span></div>
+        <section class="inspection-strip" aria-label="Thông tin ngăn đang chọn">
+          <div><span class="eyebrow">Ngăn đang chọn</span><h2 id="selected-medication">Đang tải dữ liệu</h2><p id="selected-details">Chọn một ngăn để xem thuốc và lịch nhắc.</p></div>
+          <div class="inspection-actions"><span id="selected-status" class="tag neutral">Chưa có dữ liệu</span><button id="virtual-lid" type="button" class="button secondary">Mở nắp mô hình</button></div>
+        </section>
+        <section class="device-console" aria-label="Bảng điều khiển trên hộp">
+          <div class="console-screen"><span>Giờ Việt Nam · Dashboard</span><time id="box-clock">--:--:--</time><strong id="box-live-state">Đang đồng bộ</strong><span id="box-source">Chưa có dữ liệu</span></div>
+          <div class="console-controls"><div class="console-lamps" id="box-lamps" aria-label="Đèn trạng thái ngăn"></div><div class="form-actions"><button class="button secondary caregiver-control" id="box-scan">Quét mã thuốc</button><button class="button primary caregiver-control" id="box-refill">Nạp ngăn đã chọn</button><button class="button secondary caregiver-control" id="box-mute">Tắt âm và đèn</button><button class="button secondary caregiver-control" id="box-record-open" hidden>Ghi nhận mở ngăn mô phỏng</button></div><p id="box-feedback" role="status">Bấm nắp để xem bên trong. Các nút SCAN, REFILL, MUTE trên thân hộp có thể bấm trực tiếp.</p></div>
+        </section>
+        <section class="metrics" aria-label="Thông tin nhanh">
+          <article class="metric"><span class="metric-label">Lịch nhắc tiếp theo</span><strong id="next-time">Đang tải</strong><span id="next-reminder" class="metric-note">Đang tải lịch nhắc</span></article>
+          <article class="metric"><span class="metric-label">Ngăn đã được gán</span><strong id="assigned-count">Đang tải<small>/ 3 ngăn</small></strong><span id="assignment-note" class="metric-note">Đang tải thông tin</span></article>
+          <article class="metric"><span class="metric-label">Môi trường bảo quản</span><strong id="environment-value">Đang tải</strong><span id="environment-status" class="metric-note">Chưa có dữ liệu cảm biến</span></article>
+        </section>
+        <section class="section-block compartments-section">
+          <div class="section-heading"><div><span class="eyebrow">Phân bổ hiện tại</span><h2>Ba ngăn thuốc</h2></div><span class="small muted">Chọn ngăn để xem trên mô hình</span></div>
+          <div id="slots" class="slot-grid"><p class="empty">Đang tải các ngăn thuốc…</p></div>
+        </section>
+        <section class="section-block activity-section">
+          <div class="section-heading"><h2>Hoạt động gần đây</h2><button class="text-button" data-view="history">Xem tất cả</button></div>
+          <div id="recent-events"><p class="empty">Chưa có hoạt động.</p></div>
+        </section>
+      </section>
       <div id="devices" class="device-grid"></div>
       <section class="surface section-block standalone"><div class="section-heading"><h2>Điều khiển hộp đang chọn</h2><span id="control-device" class="tag neutral">PB01</span></div><div class="form-actions"><button class="button primary caregiver-control" onclick="sendCommand('REQUEST_STATUS')">Cập nhật trạng thái</button><button class="button secondary caregiver-control" onclick="sendCommand('CLEAR_ALERT')">Tắt âm & đèn nhắc</button></div><p id="command-result" class="inline-message" role="status" hidden></p><div id="commands" class="command-list"></div><nav id="commands-pagination" class="pagination" aria-label="Phân trang lệnh"></nav></section>
     </div>
 
   </main>
 
+  <dialog id="product-play" aria-labelledby="play-title">
+    <div class="dialog-heading"><div><span class="eyebrow">Thử thao tác trên mô hình</span><h2 id="play-title">Ngăn kéo 1</h2></div><button type="button" id="play-close" class="icon-button" aria-label="Đóng">×</button></div>
+    <p id="play-instruction" class="play-instruction"></p>
+    <p id="play-assignment" class="play-assignment"></p>
+    <div class="play-actions"><button id="play-drawer" class="button secondary">Kéo ngăn ra</button><button id="play-next" class="button secondary">Chọn ngăn tiếp</button></div>
+    <div class="play-package"><span class="package-icon" aria-hidden="true">▥</span><div><strong id="play-package-name">Bao bì thuốc</strong><p>Đưa mã trên bao bì về phía cửa quét trên mặt hộp.</p></div></div>
+    <label for="play-code">Mã trên bao bì thử nghiệm</label><input id="play-code" autocomplete="off" maxlength="48">
+    <div class="play-actions"><button id="play-scan" class="button primary">Đưa bao bì vào máy quét</button><button id="play-camera" class="button secondary">Quét bằng camera</button></div>
+    <p id="play-result" role="status" aria-live="polite"></p>
+    <div class="play-add"><label for="play-quantity">Số viên thêm vào mô hình</label><input id="play-quantity" type="number" min="1" max="12" value="3"><button id="play-add" class="button primary" disabled>Thêm thuốc vào ngăn</button></div>
+    <p id="play-inventory" class="play-inventory"></p>
+    <div class="play-actions"><button id="play-remind" class="button secondary">Thử nhắc thuốc</button><button id="play-alert" class="button secondary">Thử cảnh báo</button><button id="play-mute" class="button secondary">Tắt báo mô phỏng</button></div>
+    <p class="play-note">Số viên và thao tác ở đây chỉ thuộc mô phỏng. Nạp thuốc cho thiết bị dùng mục Nạp thuốc.</p>
+  </dialog>
   <dialog id="settings-dialog"><div class="dialog-heading"><h2>Truy cập hệ thống</h2><button id="settings-close" class="icon-button" aria-label="Đóng">×</button></div><p id="session" class="section-note">Đang kiểm tra kết nối…</p><label>Khóa truy cập API<input id="access-token" type="password" autocomplete="off" placeholder="Nhập khóa cá nhân"></label><button id="login" class="button primary">Kết nối</button><p id="login-result" class="inline-message" role="status" aria-live="polite" hidden></p></dialog>
-  <script src="/static/dashboard.js?v=lab-integration-4"></script>
+  <script src="/static/dashboard.js?v=redesign-1"></script>
+  <script type="module" src="/static/pillbox-model.js?v=redesign-1"></script>
 </body>
 </html>

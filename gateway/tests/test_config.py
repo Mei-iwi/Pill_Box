@@ -170,7 +170,7 @@ class EnvironmentTests(unittest.TestCase):
             main(["--db", str(database), "--port", "5011"])
             self.assertEqual(os.environ["PILLBOX_MQTT_AUTOSTART"], "0")
             accounts.assert_called_once_with(self.root / "custom-auth.json")
-            create.assert_called_once_with(database, identities)
+            create.assert_called_once_with(database, identities, demo_admin=True)
             app.run.assert_called_once_with(
                 host="127.0.0.1",
                 port=5011,

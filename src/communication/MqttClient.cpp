@@ -182,6 +182,7 @@ void MqttClient::publishHeartbeat(const char* state, uint32_t sequence, uint16_t
     doc["device_id"] = AppConfig::DEVICE_ID; doc["status"] = wifi_.connected() ? "online" : "offline";
     doc["state"] = state; doc["seq"] = sequence;
     doc["boot_id"] = bootId_;
+    if(barcode_[0]){doc["barcode"]=barcode_;doc["barcode_sequence"]=barcodeSequence_;}
     doc["uptime_ms"]=millis();
     doc["utc_synced"]=time(nullptr)>=1704067200;
     doc["wifi_rssi"]=WiFi.RSSI();
@@ -192,8 +193,12 @@ void MqttClient::publishHeartbeat(const char* state, uint32_t sequence, uint16_t
         doc["queue_depth"] = queue_.size(); doc["queue_dropped"] = queue_.dropped();
         xSemaphoreGive(mutex_);
     }
-    char payload[512]; serializeJson(doc, payload, sizeof(payload));
+    char payload[768]; serializeJson(doc, payload, sizeof(payload));
     publishKind("heartbeat", payload,false,true);
+}
+
+void MqttClient::setBarcode(const char* value) {
+    strlcpy(barcode_,value,sizeof(barcode_));++barcodeSequence_;
 }
 
 void MqttClient::publishStatus(const char* state, uint32_t sequence) {

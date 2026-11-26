@@ -49,6 +49,13 @@ def validate_message(topic, payload):
     if not isinstance(message, dict) or message.get("device_id") != parts[1]:
         raise ValueError("invalid device_id")
     kind = parts[2]
+    if "barcode" in message:
+        barcode=message["barcode"]
+        if (kind!="heartbeat" or not isinstance(barcode,str) or not 4<=len(barcode)<=48
+            or not all(32<=ord(c)<=126 for c in barcode)
+            or type(message.get("barcode_sequence")) is not int or not 1<=message["barcode_sequence"]<=4294967295
+            or not message.get("boot_id")):
+            raise ValueError("invalid barcode capture")
     if "wifi_rssi" in message and (
         type(message["wifi_rssi"]) is not int or not -127 <= message["wifi_rssi"] <= 0
     ):
@@ -293,6 +300,10 @@ def _store_message(topic, message, db):
         ):
             raise ValueError("schedule not assigned to event device/slot")
     db.execute("INSERT OR IGNORE INTO devices(device_id) VALUES (?)", (device_id,))
+    if kind=="heartbeat" and "barcode" in message:
+        scan_id=message["boot_id"]+":"+str(message["barcode_sequence"])
+        db.execute("INSERT INTO device_barcode_scans VALUES (?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET scan_id=excluded.scan_id,barcode=excluded.barcode,received_at=excluded.received_at WHERE device_barcode_scans.scan_id!=excluded.scan_id",
+                   (device_id,scan_id,message["barcode"],utc_now()))
     if kind in {"status", "heartbeat"}:
         touch_device(
             db,

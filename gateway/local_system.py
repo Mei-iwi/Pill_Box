@@ -258,12 +258,13 @@ class LocalFleet:
                 self.emit(did, "status", status="offline")
 
 
-def create_local_app(path, identities):
+def create_local_app(path, identities, demo_admin=False):
     fleet = LocalFleet(path)
     app = create_app(
         dict(
             DB_PATH=str(path),
             AUTH_IDENTITIES=identities,
+            LOCAL_DEMO_ADMIN=demo_admin,
             MQTT_CLIENT=fleet,
             REQUIRE_REFILL_SESSION=True,
             HTTP_INGEST_ENABLED=os.getenv("PILLBOX_HTTP_INGEST", "1") == "1",
@@ -329,7 +330,9 @@ def main(argv=None):
             + " --realistic first (backs up existing data)."
         )
     auth_path = project_path(os.getenv("PILLBOX_AUTH_FILE") or DEFAULT_PATH)
-    app = create_local_app(path, create_accounts(auth_path))
+    bind = os.getenv("PILLBOX_BIND", "127.0.0.1")
+    demo_admin = os.getenv("PILLBOX_LOCAL_LOGIN", "0") == "0" and bind in ("127.0.0.1", "localhost", "::1") and os.getenv("PILLBOX_DEPLOYMENT") != "care"
+    app = create_local_app(path, create_accounts(auth_path), demo_admin=demo_admin)
     fleet = app.extensions["local_fleet"]
     fleet.start()
     bind = os.getenv("PILLBOX_BIND", "127.0.0.1")

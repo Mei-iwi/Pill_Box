@@ -51,6 +51,56 @@ class GatewayTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_message("pillbox/PB01/event", "{")
 
+    def test_local_demo_admin_needs_no_key_and_is_limited_to_loopback(self):
+        identities={'a'*24:{'actor_id':'FAMILY01','role':'family','devices':['PB01']}}
+        client=create_app({'DB_PATH':self.tmp.name,'AUTH_IDENTITIES':identities,'LOCAL_DEMO_ADMIN':True}).test_client()
+        session=client.get('/api/session').get_json()
+        self.assertTrue(session['demo_admin'])
+        self.assertEqual(session['identity']['role'],'admin')
+        self.assertEqual(client.get('/api/devices').status_code,200)
+        self.assertEqual(client.get('/api/session',environ_overrides={'REMOTE_ADDR':'192.168.1.10'}).status_code,401)
+        remote=client.get('/api/session',headers={'Authorization':'Bearer '+'a'*24},environ_overrides={'REMOTE_ADDR':'192.168.1.10'}).get_json()
+        self.assertFalse(remote['demo_admin'])
+        self.assertEqual(remote['identity']['role'],'family')
+
+    def test_device_scanner_is_capture_only_and_deduplicates(self):
+        payload={"device_id":"PB01","status":"online","state":"IDLE","boot_id":"scanner-test","seq":1,"barcode":"MED001","barcode_sequence":1}
+        store_message("pillbox/PB01/heartbeat",payload,self.tmp.name)
+        first=self.app.get('/api/devices/PB01/live').get_json()['barcode_scan']
+        self.assertEqual(first['barcode'],'MED001')
+        payload['seq']=2
+        store_message("pillbox/PB01/heartbeat",payload,self.tmp.name)
+        second=self.app.get('/api/devices/PB01/live').get_json()['barcode_scan']
+        self.assertEqual(first,second)
+        with connect(self.tmp.name) as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM refill_verifications').fetchone()[0],0)
+        payload['barcode']='x'*49
+        with self.assertRaises(ValueError):
+            validate_message('pillbox/PB01/heartbeat',payload)
+
+    def test_barcode_lookup_requires_an_explicit_catalog_mapping(self):
+        self.assertEqual(
+            self.app.get("/api/medications/barcodes/4006381333931").status_code, 404
+        )
+        self.assertEqual(
+            self.app.get("/api/medications/barcodes/4006381333932").status_code, 400
+        )
+        direct = self.app.get("/api/medications/barcodes/MED001")
+        self.assertEqual(direct.status_code, 200)
+        self.assertEqual(direct.get_json()["medication_name"], "Vitamin C")
+        with connect(self.tmp.name) as db:
+            db.execute(
+                "INSERT INTO medication_barcodes(barcode,medication_code,strength,dosage_form,manufacturer) VALUES (?,?,?,?,?)",
+                ("4006381333931", "MED001", "500 mg", "tablet", "Test maker"),
+            )
+        result = self.app.get("/api/medications/barcodes/4006381333931")
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.get_json()["medication_code"], "MED001")
+        with connect(self.tmp.name) as db:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM refill_verifications").fetchone()[0], 0
+            )
+
     def test_unknown_event(self):
         with self.assertRaises(ValueError):
             validate_message(
